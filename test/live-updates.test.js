@@ -7,20 +7,21 @@ let server;
 let origin;
 let live;
 
-async function frame(reader) {
-  let text = '';
-  for (;;) {
-    const next = await reader.read();
+async function frame(stream) {
+  while (!stream.pending.includes('\n\n')) {
+    const next = await stream.reader.read();
     if (next.done) throw new Error('SSE stream ended before a frame arrived');
-    text += new TextDecoder().decode(next.value);
-    const end = text.indexOf('\n\n');
-    if (end !== -1) return text.slice(0, end);
+    stream.pending += next.value;
   }
+  const end = stream.pending.indexOf('\n\n');
+  const value = stream.pending.slice(0, end);
+  stream.pending = stream.pending.slice(end + 2);
+  return value;
 }
 
-async function eventFrame(reader, eventName) {
+async function eventFrame(stream, eventName) {
   for (;;) {
-    const value = await frame(reader);
+    const value = await frame(stream);
     if (value.startsWith(`event: ${eventName}\n`)) return value;
   }
 }
@@ -31,7 +32,7 @@ async function openStream(cookie = 'mci_session=signed-cookie') {
   });
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type'), /text\/event-stream/);
-  return response.body.getReader();
+  return { reader: response.body.pipeThrough(new TextDecoderStream()).getReader(), pending: '' };
 }
 
 before(async () => {
@@ -86,8 +87,8 @@ test('subscribers receive ready, heartbeat, and metadata-only changes', async ()
     body: JSON.stringify({ medical: 'must never be sent' }),
   });
   assert.equal((await request).status, 201);
-  for (const reader of [first, second]) {
-    const change = await eventFrame(reader, 'change');
+  for (const stream of [first, second]) {
+    const change = await eventFrame(stream, 'change');
     assert.equal(change.split('\n')[0], 'event: change');
     assert.deepEqual(JSON.parse(change.split('\n')[1].slice('data: '.length)), {
       resource: 'patients',
@@ -95,13 +96,12 @@ test('subscribers receive ready, heartbeat, and metadata-only changes', async ()
     });
     assert.doesNotMatch(change, /medical|MCI-001/);
   }
-  first.cancel();
-  second.cancel();
+  await Promise.all([first.reader.cancel(), second.reader.cancel()]);
 });
 
 test('maps stock, incidents, registration, and management writes and suppresses reads, presence, and failures', async () => {
-  const reader = await openStream();
-  await frame(reader);
+  const stream = await openStream();
+  await frame(stream);
   const post = (path, body = {}, headers = {}) =>
     fetch(`${origin}${path}`, {
       method: 'POST',
@@ -117,7 +117,7 @@ test('maps stock, incidents, registration, and management writes and suppresses 
     201,
   );
   assert.deepEqual(
-    JSON.parse((await eventFrame(reader, 'change')).split('\n')[1].slice(6)),
+    JSON.parse((await eventFrame(stream, 'change')).split('\n')[1].slice(6)),
     {
       resource: 'stock',
       incidentId: 'inc-stock',
@@ -125,7 +125,7 @@ test('maps stock, incidents, registration, and management writes and suppresses 
   );
   assert.equal((await post('/api/register')).status, 201);
   assert.deepEqual(
-    JSON.parse((await eventFrame(reader, 'change')).split('\n')[1].slice(6)),
+    JSON.parse((await eventFrame(stream, 'change')).split('\n')[1].slice(6)),
     {
       resource: 'staff',
       incidentId: null,
@@ -133,7 +133,7 @@ test('maps stock, incidents, registration, and management writes and suppresses 
   );
   assert.equal((await post('/api/management/staff')).status, 201);
   assert.deepEqual(
-    JSON.parse((await eventFrame(reader, 'change')).split('\n')[1].slice(6)),
+    JSON.parse((await eventFrame(stream, 'change')).split('\n')[1].slice(6)),
     {
       resource: 'staff',
       incidentId: null,
@@ -141,18 +141,18 @@ test('maps stock, incidents, registration, and management writes and suppresses 
   );
   assert.equal((await post('/api/incidents')).status, 201);
   assert.deepEqual(
-    JSON.parse((await eventFrame(reader, 'change')).split('\n')[1].slice(6)),
+    JSON.parse((await eventFrame(stream, 'change')).split('\n')[1].slice(6)),
     {
       resource: 'incidents',
       incidentId: 'inc-new',
     },
   );
-  reader.cancel();
+  await stream.reader.cancel();
 });
 
 test('close clears subscribers and heartbeat without holding the test open', async () => {
-  const reader = await openStream();
-  await frame(reader);
+  const stream = await openStream();
+  await frame(stream);
   live.close();
-  await assert.rejects(() => frame(reader), /ended before/);
+  await assert.rejects(() => eventFrame(stream, 'change'), /ended before/);
 });

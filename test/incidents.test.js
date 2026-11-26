@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   initIncidents,
   registerIncidentRoutes,
+  savePatient,
   triageReview,
 } from '../src/incidents.js';
 
@@ -45,7 +46,63 @@ test('migrates v1 rows into legacy without changing identifiers, history sequenc
   assert.equal(
     db.prepare('SELECT user_version FROM pragma_user_version').get()
       .user_version,
-    2,
+    3,
+  );
+});
+
+test('automatic intake grows past six digits, survives restart, and skips occupied QR codes', async () => {
+  const save = (body) => fetch(base + '/api/patients', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ color: 'green', ...body }),
+  });
+  const overview = async () => (await fetch(base + '/api/overview')).json();
+  assert.equal((await overview()).nextPatientId, 'MCI-002');
+  // Place the sequence at a digit boundary without creating a million records.
+  db.prepare('UPDATE incidents SET nextPatientId=? WHERE id=?').run('MCI-999999', 'legacy');
+  const ahead = await save({ id: 'MCI-1000001' });
+  assert.equal(ahead.status, 201);
+  assert.equal((await ahead.json()).nextPatientId, 'MCI-999999');
+  const failed = await save({ stockUsage: [{ stockId: 'STK-01', quantity: 20 }] });
+  assert.equal(failed.status, 409);
+  assert.equal((await overview()).nextPatientId, 'MCI-999999');
+  const boundary = await save({});
+  assert.equal((await boundary.json()).nextPatientId, 'MCI-1000000');
+  initIncidents(db);
+  assert.equal((await overview()).nextPatientId, 'MCI-1000000');
+  assert.equal((await fetch(base + '/api/qr/MCI-1000000.png')).status, 200);
+  assert.equal((await (await save({ id: 'MCI-1000000' })).json()).nextPatientId, 'MCI-1000002');
+  db.prepare('UPDATE incidents SET nextPatientId=? WHERE id=?').run('MCI-9007199254740992', 'legacy');
+  const large = await (await save({})).json();
+  assert.equal(large.patient.id, 'MCI-9007199254740992');
+  assert.equal(large.nextPatientId, 'MCI-9007199254740993');
+});
+
+test('a fresh incident registers 10,000 consecutive patients on demand', async () => {
+  const response = await fetch(base + '/api/incidents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: '10k intake exercise' }),
+  });
+  const { incident } = await response.json();
+  const headers = { 'x-incident-id': incident.id };
+  const intake = async () => (await fetch(base + '/api/overview?view=intake', { headers })).json();
+  assert.equal((await intake()).nextPatientId, 'MCI-001');
+  const assigned = new Set();
+  for (let n = 1; n <= 10_000; n++) {
+    const { patient } = savePatient(db, {
+      scope: incident.id, data: { color: 'green' }, actor: 'simulation', isEdit: false,
+    });
+    assert.equal(patient.id, 'MCI-' + String(n).padStart(3, '0'));
+    assigned.add(patient.id);
+  }
+  assert.equal(assigned.size, 10_000);
+  const board = await intake();
+  assert.equal(board.nextPatientId, 'MCI-10001');
+  assert.equal(Object.hasOwn(board, 'patients'), false);
+  assert.equal(
+    db.prepare('SELECT count(*) AS n FROM patients WHERE incidentId=?').get(incident.id).n,
+    10_000,
   );
 });
 
@@ -199,6 +256,21 @@ test('soft archives patient and legacy QR URL remains accepted', async () => {
   );
   response = await fetch(`${base}/api/patients/MCI-001`);
   assert.equal(response.status, 200);
+  const archived = await response.json();
+  assert.ok(archived.patient.deletedAt);
+  assert.equal(archived.history[0].note, 'old');
+  const overview = await (await fetch(`${base}/api/overview`)).json();
+  assert.equal(overview.patients.length, 0);
+  assert.equal(overview.nextPatientId, 'MCI-002');
+  for (const [method, path, body] of [
+    ['PATCH', '/api/patients/MCI-001', { version: archived.patient.version, color: 'green' }],
+    ['POST', '/api/patients', { id: 'MCI-001', color: 'green' }],
+  ]) {
+    const attempt = await fetch(base + path, {
+      method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(attempt.status, 409);
+  }
 });
 
 test('a paired black assessment counts toward coverage and not toward severity direction', () => {
@@ -221,4 +293,68 @@ test('a paired black assessment counts toward coverage and not toward severity d
   assert.equal(review.blackCases, 1);
   assert.equal(review.higherDirection, 0);
   assert.equal(review.lowerDirection, 0);
+});
+
+test('intake QR advances only after a committed registration and keeps the first chart bound to its card', async () => {
+  const created = await fetch(base + '/api/incidents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'ฝึกรับผู้ป่วย' }),
+  });
+  const { incident } = await created.json();
+  const headers = {
+    'x-incident-id': incident.id,
+    'content-type': 'application/json',
+  };
+  const read = async (path) =>
+    (await fetch(base + '/api/' + path, { headers })).json();
+  const save = (body) =>
+    fetch(base + '/api/patients', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  assert.equal((await read('overview')).nextPatientId, 'MCI-001');
+  assert.equal((await read('patients/MCI-001')).patient, null);
+  assert.equal((await save({ id: 'MCI-001', color: 'invalid' })).status, 400);
+  assert.equal((await read('overview')).nextPatientId, 'MCI-001');
+  const first = {
+    id: 'MCI-001',
+    color: 'green',
+    cc: 'เคสฝึกซ้อม',
+    requestId: 'first-qr',
+  };
+  const registered = await save(first);
+  assert.equal(registered.status, 201);
+  assert.equal((await registered.json()).nextPatientId, 'MCI-002');
+  assert.equal((await (await save(first)).json()).nextPatientId, 'MCI-002');
+  assert.equal(
+    (await save({ ...first, requestId: 'other-scanner' })).status,
+    409,
+  );
+  for (let n = 2; n <= 10; n++) {
+    const id = 'MCI-' + String(n).padStart(3, '0');
+    assert.equal((await read('overview')).nextPatientId, id);
+    assert.equal((await save({ id, color: 'yellow' })).status, 201);
+  }
+  const chart = await read('patients/MCI-001');
+  assert.equal(chart.patient.cc, first.cc);
+  assert.equal(chart.history.length, 1);
+  assert.equal((await read('overview')).nextPatientId, 'MCI-011');
+  await fetch(base + '/api/patients/MCI-001', {
+    method: 'DELETE',
+    headers,
+    body: JSON.stringify({ version: 1 }),
+  });
+  assert.equal((await read('overview')).nextPatientId, 'MCI-011');
+  await fetch(base + '/api/incidents/' + incident.id, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ closed: true }),
+  });
+  assert.equal((await read('overview')).nextPatientId, null);
+  assert.equal(
+    (await (await fetch(base + '/api/overview')).json()).nextPatientId,
+    'MCI-002',
+  );
 });

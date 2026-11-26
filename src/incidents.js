@@ -13,6 +13,7 @@ const ZONES = new Set([
   'morgue',
 ]);
 const POINTS = new Set(['primary', 'secondary', '']);
+const SEXES = new Set(['', 'male', 'female', 'other']);
 const DECON = new Set(['none', 'pending', 'in-progress', 'cleared']);
 const DEFAULT_STOCK = [
   ['STK-01', 'Oxygen Tank + Mask', 'Airway', 20, 'ถัง', 5],
@@ -24,9 +25,7 @@ const DEFAULT_STOCK = [
 ];
 const now = () => new Date().toISOString();
 const idOk = (id) =>
-  /^MCI-\d{3,6}$/.test(String(id || '')) &&
-  Number(String(id).slice(4)) > 0 &&
-  String(id) === `MCI-${String(Number(String(id).slice(4))).padStart(3, '0')}`;
+  /^MCI-(?:[0-9]{3}|[1-9][0-9]{3,})$/.test(id) && id !== 'MCI-000';
 const normalizeId = (v) =>
   String(v || '')
     .trim()
@@ -60,13 +59,15 @@ export function initIncidents(db) {
   db.exec('PRAGMA busy_timeout=5000');
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.exec(
-      `CREATE TABLE IF NOT EXISTS incidents (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, closedAt TEXT)`,
-    );
-    const t = now();
-    db.prepare(
-      "INSERT OR IGNORE INTO incidents (id,name,status,createdAt,updatedAt) VALUES ('legacy','ข้อมูลเดิม', 'open', ?, ?)",
-    ).run(t, t);
+    if (!hasColumn(db, 'incidents', 'id')) {
+      db.exec(
+        `CREATE TABLE incidents (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, closedAt TEXT)`,
+      );
+      const t = now();
+      db.prepare(
+        "INSERT INTO incidents (id,name,status,createdAt,updatedAt) VALUES ('legacy','ข้อมูลเดิม','open',?,?)",
+      ).run(t, t);
+    }
     addColumn(db, 'patients', 'incidentId', "TEXT NOT NULL DEFAULT 'legacy'");
     addColumn(db, 'patients', 'deletedAt', 'TEXT');
     addColumn(db, 'history', 'incidentId', "TEXT NOT NULL DEFAULT 'legacy'");
@@ -83,6 +84,10 @@ export function initIncidents(db) {
         CREATE TABLE patients (id TEXT NOT NULL, color TEXT NOT NULL, zone TEXT NOT NULL, triagePoint TEXT NOT NULL, deconStatus TEXT NOT NULL, demo TEXT NOT NULL, cc TEXT NOT NULL, rr TEXT NOT NULL, hr TEXT NOT NULL, bp TEXT NOT NULL, spo2 TEXT NOT NULL, gcs TEXT NOT NULL, interventions TEXT NOT NULL, transport TEXT NOT NULL, version INTEGER NOT NULL, staff TEXT NOT NULL, updatedAt TEXT NOT NULL, incidentId TEXT NOT NULL DEFAULT 'legacy', deletedAt TEXT, PRIMARY KEY (id,incidentId));
         INSERT INTO patients SELECT id,color,zone,triagePoint,deconStatus,demo,cc,rr,hr,bp,spo2,gcs,interventions,transport,version,staff,updatedAt,incidentId,deletedAt FROM patients__v1;
         DROP TABLE patients__v1`);
+    }
+    for (const table of ['patients', 'history']) {
+      addColumn(db, table, 'sex', "TEXT NOT NULL DEFAULT '' CHECK(sex IN ('','male','female','other'))");
+      addColumn(db, table, 'age', 'REAL CHECK(age >= 0)');
     }
     const stockPk = db
       .prepare('PRAGMA table_info(stock)')
@@ -101,7 +106,14 @@ export function initIncidents(db) {
       CREATE TABLE IF NOT EXISTS stock_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, incidentId TEXT NOT NULL, patientId TEXT NOT NULL, patientVersion INTEGER NOT NULL, stockId TEXT NOT NULL, quantity INTEGER NOT NULL CHECK(quantity > 0), staff TEXT NOT NULL, createdAt TEXT NOT NULL, requestId TEXT UNIQUE);
       CREATE INDEX IF NOT EXISTS idx_stock_movements_patient ON stock_movements(incidentId,patientId);
       CREATE TABLE IF NOT EXISTS incident_mutations (requestId TEXT PRIMARY KEY, incidentId TEXT NOT NULL, patientId TEXT NOT NULL, createdAt TEXT NOT NULL)`);
-    db.exec('PRAGMA user_version=2');
+    if (!hasColumn(db, 'incidents', 'nextPatientId')) {
+      db.exec("ALTER TABLE incidents ADD COLUMN nextPatientId TEXT NOT NULL DEFAULT 'MCI-001'");
+      const update = db.prepare('UPDATE incidents SET nextPatientId=? WHERE id=?');
+      for (const { id } of db.prepare('SELECT id FROM incidents').all()) {
+        update.run(firstUnusedId(db, id, 'MCI-001'), id);
+      }
+    }
+    db.exec('PRAGMA user_version=3');
     db.exec('COMMIT');
   } catch (e) {
     try {
@@ -160,18 +172,27 @@ function movements(db, id, scope) {
 }
 function patientResponse(db, id, scope) {
   return {
-    patient: jsonPatient(patientRow(db, id, scope)),
+    patient: jsonPatient(patientRow(db, id, scope)) ?? null,
     history: historyRows(db, id, scope),
     stockMovements: movements(db, id, scope),
   };
 }
-function nextId(db, scope) {
-  const rows = db
-    .prepare('SELECT id FROM patients WHERE incidentId=?')
-    .all(scope);
-  let n = 1;
-  while (rows.some((x) => x.id === `MCI-${String(n).padStart(3, '0')}`)) n += 1;
-  return `MCI-${String(n).padStart(3, '0')}`;
+function firstUnusedId(db, scope, candidate) {
+  const used = db.prepare('SELECT 1 FROM patients WHERE incidentId=? AND id=?');
+  let number = BigInt(candidate.slice(4));
+  while (used.get(scope, candidate)) {
+    number += 1n;
+    candidate = `MCI-${number.toString().padStart(3, '0')}`;
+  }
+  return candidate;
+}
+function ageInYears(value) {
+  const raw = typeof value === 'string' ? value.trim() : value;
+  if (raw == null || raw === '') return null;
+  const age = typeof raw === 'string' ? Number(raw) : raw;
+  if (!Number.isFinite(age) || age < 0)
+    throw new Error('กรุณาระบุอายุเป็นจำนวนปีตั้งแต่ 0 ขึ้นไป');
+  return age;
 }
 function validatePatient(data) {
   const p = {
@@ -179,7 +200,10 @@ function validatePatient(data) {
     zone: data.zone || 'triage',
     triagePoint: data.triagePoint || '',
     deconStatus: data.deconStatus || 'none',
+    sex: data.sex ?? '',
+    age: ageInYears(data.age),
   };
+  if (!SEXES.has(p.sex)) throw new Error('กรุณาเลือกเพศจากรายการ');
   if (
     !COLORS.has(p.color) ||
     !ZONES.has(p.zone) ||
@@ -194,13 +218,13 @@ function savePatient(
   db,
   { scope, data, actor, id, version, requestId, isEdit, inTransaction = false },
 ) {
-  const incident = getIncident(db, scope);
-  if (!incident)
-    throw Object.assign(new Error('incident not found'), { status: 404 });
-  if (incident.status !== 'open')
-    throw Object.assign(new Error('incident is closed'), { status: 409 });
   if (!inTransaction) db.exec('BEGIN IMMEDIATE');
   try {
+    const incident = getIncident(db, scope);
+    if (!incident)
+      throw Object.assign(new Error('incident not found'), { status: 404 });
+    if (incident.status !== 'open')
+      throw Object.assign(new Error('incident is closed'), { status: 409 });
     if (requestId) {
       const prior = db
         .prepare(
@@ -223,7 +247,7 @@ function savePatient(
       e.status = 409;
       throw e;
     }
-    if (!id) id = nextId(db, scope);
+    if (!id) id = incident.nextPatientId;
     if (!idOk(id)) throw new Error('invalid patient id');
     const p = validatePatient({ ...(old || {}), ...data });
     const t = now(),
@@ -248,11 +272,13 @@ function savePatient(
       data.gcs ?? old?.gcs ?? '',
       JSON.stringify(interventions),
       data.transport ?? old?.transport ?? '',
+      p.sex,
+      p.age,
     ];
     if (old) {
       const result = db
         .prepare(
-          'UPDATE patients SET color=?,zone=?,triagePoint=?,deconStatus=?,demo=?,cc=?,rr=?,hr=?,bp=?,spo2=?,gcs=?,interventions=?,transport=?,version=?,staff=?,updatedAt=? WHERE id=? AND incidentId=? AND version=?',
+          'UPDATE patients SET color=?,zone=?,triagePoint=?,deconStatus=?,demo=?,cc=?,rr=?,hr=?,bp=?,spo2=?,gcs=?,interventions=?,transport=?,sex=?,age=?,version=?,staff=?,updatedAt=? WHERE id=? AND incidentId=? AND version=?',
         )
         .run(...vals, v, actor, t, id, scope, version);
       if (result.changes !== 1) {
@@ -262,11 +288,15 @@ function savePatient(
       }
     } else {
       db.prepare(
-        'INSERT INTO patients (id,color,zone,triagePoint,deconStatus,demo,cc,rr,hr,bp,spo2,gcs,interventions,transport,version,staff,updatedAt,incidentId,deletedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)',
+        'INSERT INTO patients (id,color,zone,triagePoint,deconStatus,demo,cc,rr,hr,bp,spo2,gcs,interventions,transport,sex,age,version,staff,updatedAt,incidentId,deletedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)',
       ).run(id, ...vals, v, actor, t, scope);
+      if (id === incident.nextPatientId) {
+        db.prepare('UPDATE incidents SET nextPatientId=? WHERE id=?')
+          .run(firstUnusedId(db, scope, id), scope);
+      }
     }
     db.prepare(
-      'INSERT INTO history (patientId,note,staff,updatedAt,color,zone,triagePoint,deconStatus,rr,hr,bp,spo2,gcs,interventions,transport,incidentId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO history (patientId,note,staff,updatedAt,color,zone,triagePoint,deconStatus,rr,hr,bp,spo2,gcs,interventions,transport,sex,age,incidentId) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(
       id,
       data.note || '',
@@ -284,6 +314,8 @@ function savePatient(
         vals[10],
         vals[11],
         vals[12],
+        p.sex,
+        p.age,
       ],
       scope,
     );
@@ -432,7 +464,7 @@ export function registerIncidentRoutes(
     try {
       const name = String(req.body?.name || '').trim();
       if (!name) throw new Error('incident name is required');
-      const id = `inc-${crypto.randomUUID().slice(0, 8)}`,
+      const id = `inc-${crypto.randomUUID()}`,
         t = now();
       db.exec('BEGIN IMMEDIATE');
       db.prepare(
@@ -474,6 +506,8 @@ export function registerIncidentRoutes(
   app.get('/api/overview', guard, (req, res) => {
     try {
       const scope = requireIncident(db, req);
+      const intake = { incident: scope, nextPatientId: scope.closedAt ? null : scope.nextPatientId };
+      if (req.query.view === 'intake') return res.json(intake);
       const patients = db
         .prepare(
           'SELECT * FROM patients WHERE incidentId=? AND deletedAt IS NULL ORDER BY length(id),id',
@@ -491,7 +525,7 @@ export function registerIncidentRoutes(
         }
       })();
       res.json({
-        incident: scope,
+        ...intake,
         patients,
         stock,
         staffCount,
@@ -545,7 +579,9 @@ export function registerIncidentRoutes(
           requestId: req.get('idempotency-key') || data.requestId,
           isEdit: false,
         });
-      res.status(result.replay ? 200 : 201).json(result);
+      res
+        .status(result.replay ? 200 : 201)
+        .json({ ...result, nextPatientId: getIncident(db, scope.id).nextPatientId });
     } catch (e) {
       sendError(res, e);
     }

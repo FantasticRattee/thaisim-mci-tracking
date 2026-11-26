@@ -284,143 +284,161 @@
           </button>
         </div>
         <div class="dialog-body">
-          <div class="form-grid">
-            <div>
-              <label for="patientId">รหัสผู้ป่วย</label
-              ><input
-                id="patientId"
-                name="id"
-                maxlength="10"
-                placeholder="MCI-001"
-              /><small id="patientIdHelp" class="field-help"
-                >เว้นว่างเพื่อให้ระบบสร้างรหัส</small
-              >
-            </div>
-            <div>
-              <label for="patientDemo">ข้อมูลระบุตัวตนที่เห็นได้</label
-              ><input
-                id="patientDemo"
-                name="demo"
-                placeholder="เช่น ชาย ~35 ปี"
-              />
-            </div>
-          </div>
-          <fieldset>
-            <legend>สีคัดแยก <span aria-hidden="true">*</span></legend>
-            <div id="colorPicker" class="triage-picker">
-              <button
-                type="button"
-                class="triage-option color-red"
-                data-color="red"
-              >
-                แดง / Red</button
-              ><button
-                type="button"
-                class="triage-option color-yellow"
-                data-color="yellow"
-              >
-                เหลือง / Yellow</button
-              ><button
-                type="button"
-                class="triage-option color-green"
-                data-color="green"
-              >
-                เขียว / Green</button
-              ><button
-                type="button"
-                class="triage-option color-black"
-                data-color="black"
-              >
-                ดำ / Black
-              </button>
-            </div>
-            <input id="patientColor" type="hidden" required />
-          </fieldset>
-          <div class="form-grid">
-            <div>
-              <label for="patientZone"
-                >พื้นที่ปัจจุบัน <span aria-hidden="true">*</span></label
-              ><select id="patientZone" name="zone" required>
-                <option value="triage">จุดคัดแยก (Triage)</option>
-                <option value="decon">จุดชำระล้าง (Decontamination)</option>
-                <option value="treatment">จุดรักษา (Treatment)</option>
-                <option value="staging">จุดรอส่งต่อ (Transport Staging)</option>
-                <option value="evacuated">ส่งต่อแล้ว (Evacuated)</option>
-                <option value="discharged">จำหน่ายแล้ว (Discharged)</option>
-                <option value="morgue">จุดพักศพ (Morgue)</option>
-              </select>
-            </div>
-            <div>
-              <label for="patientTriagePoint">จุดคัดแยก</label
-              ><select id="patientTriagePoint" name="triagePoint">
-                <option value="">ไม่ระบุ</option>
-                <option value="primary">Primary Triage</option>
-                <option value="secondary">Secondary Triage</option>
-              </select>
-            </div>
-            <div>
-              <label for="patientDecon">สถานะ Decon</label
-              ><select id="patientDecon" name="deconStatus">
-                <option value="none">ไม่ต้อง Decon</option>
-                <option value="pending">รอชำระล้าง</option>
-                <option value="in-progress">กำลังชำระล้าง</option>
-                <option value="cleared">ชำระล้างแล้ว</option>
-              </select>
-            </div>
-            <div>
-              <label for="patientTransport">รถพยาบาล / รพ.ปลายทาง</label
-              ><input
-                id="patientTransport"
-                name="transport"
-                placeholder="เช่น ALS-01 → รพ.รามาฯ"
-              />
-            </div>
-          </div>
-          <div>
-            <label for="patientCc">อาการสำคัญ / บาดแผลหลัก</label
-            ><textarea id="patientCc" name="cc" rows="2"></textarea>
-          </div>
-          <fieldset>
-            <legend>สัญญาณชีพ</legend>
-            <div class="form-grid vitals">
+          <section
+            id="patientReadOnlySummary"
+            class="patient-readonly-summary"
+            hidden
+          >
+            <h3 id="patientSummaryTitle">สรุปแฟ้มผู้ป่วย</h3>
+            <dl id="patientSummaryGrid" class="patient-summary-grid"></dl>
+          </section>
+          <div id="patientEditorFields">
+            <div class="form-grid patient-demographics">
               <div>
-                <label for="patientRr">RR</label
-                ><input id="patientRr" name="rr" />
+                <label for="patientId">รหัสผู้ป่วย</label
+                ><input
+                  id="patientId"
+                  name="id"
+                  placeholder="MCI-001"
+                /><small id="patientIdHelp" class="field-help"
+                  >เว้นว่างเพื่อให้ระบบสร้างรหัส</small
+                >
               </div>
               <div>
-                <label for="patientHr">HR</label
-                ><input id="patientHr" name="hr" />
+                <label for="patientSex">เพศ</label>
+                <select id="patientSex" name="sex">
+                  <option value="">ไม่ทราบ</option>
+                  <option value="male">ชาย</option>
+                  <option value="female">หญิง</option>
+                  <option value="other">อื่น ๆ</option>
+                </select>
               </div>
               <div>
-                <label for="patientBp">BP</label
-                ><input id="patientBp" name="bp" />
+                <label for="patientAge">อายุ (ปี)</label>
+                <input id="patientAge" name="age" type="number" min="0" step="any" inputmode="decimal" placeholder="เช่น 35" />
               </div>
-              <div>
-                <label for="patientSpo2">SpO₂</label
-                ><input id="patientSpo2" name="spo2" />
-              </div>
-              <div>
-                <label for="patientGcs">GCS</label
-                ><input id="patientGcs" name="gcs" />
+              <div id="patientLegacyDetails" hidden>
+                <label for="patientDemo">ข้อมูลระบุตัวตนเดิม</label>
+                <input id="patientDemo" name="demo" />
               </div>
             </div>
-          </fieldset>
-          <fieldset>
-            <legend>หัตถการที่ทำ</legend>
-            <div id="interventionPicker" class="chip-list"></div>
-          </fieldset>
-          <details id="stockUsageDetails" class="stock-usage">
-            <summary>บันทึกเวชภัณฑ์ที่ใช้รอบนี้</summary>
-            <div id="stockUsagePicker" class="form-grid compact"></div>
-          </details>
-          <div>
-            <label for="patientNote">บันทึกเพิ่มเติมรอบนี้</label
-            ><textarea
-              id="patientNote"
-              name="note"
-              rows="3"
-              placeholder="บันทึกเหตุการณ์หรือการเปลี่ยนแปลง"
-            ></textarea>
+            <fieldset>
+              <legend>สีคัดแยก <span aria-hidden="true">*</span></legend>
+              <div id="colorPicker" class="triage-picker">
+                <button
+                  type="button"
+                  class="triage-option color-red"
+                  data-color="red"
+                >
+                  แดง / Red</button
+                ><button
+                  type="button"
+                  class="triage-option color-yellow"
+                  data-color="yellow"
+                >
+                  เหลือง / Yellow</button
+                ><button
+                  type="button"
+                  class="triage-option color-green"
+                  data-color="green"
+                >
+                  เขียว / Green</button
+                ><button
+                  type="button"
+                  class="triage-option color-black"
+                  data-color="black"
+                >
+                  ดำ / Black
+                </button>
+              </div>
+              <input id="patientColor" type="hidden" required />
+            </fieldset>
+            <div class="form-grid">
+              <div>
+                <label for="patientZone"
+                  >พื้นที่ปัจจุบัน <span aria-hidden="true">*</span></label
+                ><select id="patientZone" name="zone" required>
+                  <option value="triage">จุดคัดแยก (Triage)</option>
+                  <option value="decon">จุดชำระล้าง (Decontamination)</option>
+                  <option value="treatment">จุดรักษา (Treatment)</option>
+                  <option value="staging">จุดรอส่งต่อ (Transport Staging)</option>
+                  <option value="evacuated">ส่งต่อแล้ว (Evacuated)</option>
+                  <option value="discharged">จำหน่ายแล้ว (Discharged)</option>
+                  <option value="morgue">จุดพักศพ (Morgue)</option>
+                </select>
+              </div>
+              <div>
+                <label for="patientTriagePoint">จุดคัดแยก</label
+                ><select id="patientTriagePoint" name="triagePoint">
+                  <option value="">ไม่ระบุ</option>
+                  <option value="primary">Primary Triage</option>
+                  <option value="secondary">Secondary Triage</option>
+                </select>
+              </div>
+              <div>
+                <label for="patientDecon">สถานะ Decon</label
+                ><select id="patientDecon" name="deconStatus">
+                  <option value="none">ไม่ต้อง Decon</option>
+                  <option value="pending">รอชำระล้าง</option>
+                  <option value="in-progress">กำลังชำระล้าง</option>
+                  <option value="cleared">ชำระล้างแล้ว</option>
+                </select>
+              </div>
+              <div>
+                <label for="patientTransport">รถพยาบาล / รพ.ปลายทาง</label
+                ><input
+                  id="patientTransport"
+                  name="transport"
+                  placeholder="เช่น ALS-01 → รพ.รามาฯ"
+                />
+              </div>
+            </div>
+            <div>
+              <label for="patientCc">อาการสำคัญ / บาดแผลหลัก</label
+              ><textarea id="patientCc" name="cc" rows="2"></textarea>
+            </div>
+            <fieldset>
+              <legend>สัญญาณชีพ</legend>
+              <div class="form-grid vitals">
+                <div>
+                  <label for="patientRr">RR</label
+                  ><input id="patientRr" name="rr" />
+                </div>
+                <div>
+                  <label for="patientHr">HR</label
+                  ><input id="patientHr" name="hr" />
+                </div>
+                <div>
+                  <label for="patientBp">BP</label
+                  ><input id="patientBp" name="bp" />
+                </div>
+                <div>
+                  <label for="patientSpo2">SpO₂</label
+                  ><input id="patientSpo2" name="spo2" />
+                </div>
+                <div>
+                  <label for="patientGcs">GCS</label
+                  ><input id="patientGcs" name="gcs" />
+                </div>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>หัตถการที่ทำ</legend>
+              <div id="interventionPicker" class="chip-list"></div>
+            </fieldset>
+            <details id="stockUsageDetails" class="stock-usage">
+              <summary>บันทึกเวชภัณฑ์ที่ใช้รอบนี้</summary>
+              <div id="stockUsagePicker" class="form-grid compact"></div>
+            </details>
+            <div>
+              <label for="patientNote">บันทึกเพิ่มเติมรอบนี้</label
+              ><textarea
+                id="patientNote"
+                name="note"
+                rows="3"
+                placeholder="บันทึกเหตุการณ์หรือการเปลี่ยนแปลง"
+              ></textarea>
+            </div>
           </div>
           <p id="patientError" class="form-error" role="alert" hidden></p>
           <div id="historyPanel" class="history-panel" hidden>
@@ -433,6 +451,14 @@
           </div>
         </div>
         <div class="dialog-actions">
+          <button
+            id="editPatientBtn"
+            class="btn btn-secondary"
+            type="button"
+            hidden
+          >
+            บันทึกเพิ่มเติม
+          </button>
           <button id="savePatientBtn" class="btn btn-primary" type="submit">
             บันทึกข้อมูล
           </button>

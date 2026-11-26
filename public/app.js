@@ -1,6 +1,7 @@
 import { mountManagement } from './manage.js';
+import { sexLabels, ageInYears } from './patient-demographics.js';
 import { observeUpdates } from './live.js';
-import { renderExtras } from './extras.js';
+import { renderExtras, updateNextPatientCard } from './extras.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -10,7 +11,7 @@ const labels = {
   zones: 'พื้นที่ปฏิบัติงาน & Decon',
   stock: 'คลังเวชภัณฑ์',
   erg: 'คู่มือ ERG4Thai',
-  cards: 'พริ้นต์การ์ด QR',
+  cards: 'QR ผู้ป่วย',
   manage: 'จัดการข้อมูล',
 };
 const mobileLabels = {
@@ -59,8 +60,11 @@ const state = {
   redrawPatients: null,
   redrawStock: null,
   overviewRequest: 0,
+  incidentListRequest: 0,
   activePage: 'overview',
   selectedPatient: null,
+  chartFromQr: false,
+  patientReadOnly: false,
   history: [],
   filterQuery: '',
   filterColor: '',
@@ -108,15 +112,16 @@ export async function refresh({ live = false, incidentsChanged = false } = {}) {
   if (!incidentId || !accountId) return;
   const request = ++state.overviewRequest;
   const wasClosed = Boolean(state.incident.closedAt);
+  const intakeOnly = state.activePage === 'cards' && !$('#patientDialog').open;
   try {
-    const overview = await api('/api/overview');
+    const overview = await api(intakeOnly ? '/api/overview?view=intake' : '/api/overview');
     if (
       request !== state.overviewRequest ||
       state.incident?.id !== incidentId ||
       state.session?.id !== accountId
     )
       return;
-    state.overview = overview;
+    state.overview = intakeOnly ? { ...state.overview, ...overview } : overview;
     if (overview.incident) {
       state.incident = overview.incident;
       state.incidents = state.incidents.map((item) =>
@@ -144,6 +149,13 @@ export async function refresh({ live = false, incidentsChanged = false } = {}) {
     !closedChanged
   ) {
     state.redrawStock(state.overview.stock);
+  } else if (state.activePage === 'cards') {
+    updateNextPatientCard($('#page-cards'), {
+      nextPatientId: state.overview.nextPatientId,
+      incidentId,
+      incidentName: state.incident.name,
+      incidentClosed: Boolean(state.incident.closedAt),
+    });
   } else if (state.activePage === 'stock') {
     renderExtraPage('stock');
   } else {
@@ -153,7 +165,25 @@ export async function refresh({ live = false, incidentsChanged = false } = {}) {
     const edited = state.selectedPatient;
     const current =
       edited && state.overview.patients.find((item) => item.id === edited.id);
-    if (
+    if (state.patientReadOnly && edited) {
+      if (
+        closedChanged ||
+        (!edited.deletedAt && current?.version !== edited.version)
+      ) {
+        await loadPatient(edited.id, ++state.chartRequest);
+      }
+    } else if (
+      state.chartFromQr &&
+      !edited &&
+      !state.patientReadOnly &&
+      state.overview.patients.some((item) => item.id === $('#patientId').value)
+    ) {
+      $('#savePatientBtn').disabled = true;
+      showError(
+        $('#patientError'),
+        'รหัสนี้เพิ่งถูกบันทึกจากอีกเครื่องแล้ว กรุณาเปิด QR ผู้ป่วยถัดไปสำหรับคนใหม่',
+      );
+    } else if (
       state.incident.closedAt ||
       (edited && current?.version !== edited.version)
     ) {
@@ -200,6 +230,11 @@ function badge(color) {
 function patientIdFromUrl() {
   return new URLSearchParams(location.search).get('id') || '';
 }
+function qrIncidentFromUrl() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('id')) return params.get('incident') || 'legacy';
+  return location.hash === '#cards' ? params.get('incident') : null;
+}
 function notify(message, type = 'success') {
   const toast = $('#toast');
   toast.textContent = message;
@@ -225,7 +260,12 @@ function renderNav() {
       );
       b.type = 'button';
       if (state.activePage === page) b.setAttribute('aria-current', 'page');
-      b.addEventListener('click', () => navigate(page));
+      b.addEventListener('click', () => {
+        if (page !== 'cards' && location.hash === '#cards') {
+          window.history.replaceState(null, '', location.pathname);
+        }
+        navigate(page);
+      });
       if (mobile) b.setAttribute('aria-label', label);
       return b;
     });
@@ -233,15 +273,33 @@ function renderNav() {
   $('#mobileNav').replaceChildren(...make(true));
 }
 function navigate(page) {
+  const leavingIntake = state.activePage === 'cards' && page !== 'cards';
   if (page !== 'manage') unmountManagement();
+  if (page === 'cards' && state.incident) {
+    window.history.replaceState(
+      null,
+      '',
+      `?incident=${encodeURIComponent(state.incident.id)}#cards`,
+    );
+  }
   state.activePage = page;
   window.scrollTo(0, 0);
   renderNav();
   $$('.page-section').forEach((s) => {
     s.hidden = s.dataset.page !== page;
   });
+  if (!state.incident && page !== 'erg') {
+    const message = qrIncidentFromUrl()
+      ? 'ไม่พบเหตุการณ์ของ QR นี้ อาจถูกลบไปแล้ว'
+      : 'ยังไม่มีเหตุการณ์ให้เลือก สร้างเหตุการณ์ใหม่เพื่อเริ่มฝึกซ้อม';
+    $(`#page-${page}`).replaceChildren(
+      el('p', 'empty', message),
+    );
+    return;
+  }
   renderCorePage();
   if (['stock', 'erg', 'cards'].includes(page)) renderExtraPage(page);
+  if (leavingIntake) void refresh();
 }
 function renderExtraPage(page) {
   const incident = state.incident;
@@ -276,9 +334,11 @@ function renderManagement(root) {
     state.management.controller.refresh();
     return;
   }
+  const initialTab = state.management?.controller.getTab();
   unmountManagement();
   const controller = mountManagement(root, {
     incident,
+    initialTab,
     staff: state.session,
     canManage: state.session.username === state.demoUsername,
     api: (path, options = {}) =>
@@ -293,6 +353,10 @@ function renderManagement(root) {
       navigate('patients');
     },
     refresh: () => refresh({ live: true }),
+    onIncidentDeleted: async () => {
+      await loadIncidents();
+      if (!(await reconcileIncidentSelection())) renderIncidentBar();
+    },
   });
   state.management = { id: incident.id, controller };
 }
@@ -402,14 +466,36 @@ function renderIncidentBar() {
   }
 }
 async function loadIncidents() {
+  const request = ++state.incidentListRequest;
   const data = await api('/api/incidents');
-  state.incidents = data.incidents || [];
+  if (request === state.incidentListRequest) state.incidents = data.incidents || [];
+}
+async function reconcileIncidentSelection() {
+  if (state.incident && state.incidents.some((row) => row.id === state.incident.id)) return false;
+  const pinned = qrIncidentFromUrl();
+  if (pinned && !state.incidents.some((row) => row.id === pinned)) {
+    if (state.incident) await selectIncident(null, { preserveQr: true });
+    else renderIncidentBar();
+    return true;
+  }
+  const next = state.incidents.find((row) => !row.closedAt) || state.incidents[0];
+  if (!state.incident && !next) return false;
+  await selectIncident(next || null);
+  return true;
 }
 async function selectIncident(incident, { preserveQr = false } = {}) {
   const modal = $('#patientDialog');
   if (modal.open) modal.close();
-  if (!preserveQr && patientIdFromUrl())
-    window.history.replaceState(null, '', location.pathname);
+  ++state.chartRequest;
+  state.selectedPatient = null;
+  state.history = [];
+  if (!preserveQr && (patientIdFromUrl() || location.hash === '#cards')) {
+    const url =
+      state.activePage === 'cards' && incident
+        ? `?incident=${encodeURIComponent(incident.id)}#cards`
+        : location.pathname;
+    window.history.replaceState(null, '', url);
+  }
   state.incident = incident;
   state.overview = { patients: [], stock: [] };
   state.filterQuery =
@@ -417,8 +503,15 @@ async function selectIncident(incident, { preserveQr = false } = {}) {
     state.filterZone =
     state.filterTriage =
       '';
-  sessionStorage.setItem('thaisim-incident', incident.id);
+  if (incident) sessionStorage.setItem('thaisim-incident', incident.id);
+  else sessionStorage.removeItem('thaisim-incident');
   renderIncidentBar();
+  if (!incident) {
+    ++state.overviewRequest;
+    unmountManagement();
+    navigate(state.activePage);
+    return;
+  }
   if (state.activePage === 'cards') renderExtraPage('cards');
   else if (state.activePage === 'stock') renderExtraPage('stock');
   else renderCorePage();
@@ -728,7 +821,10 @@ function renderPatients(root) {
     const list = state.overview.patients.filter(
       (p) =>
         (!term ||
-          [p.id, p.cc, p.demo, p.transport, zoneLabels[p.zone]]
+          [
+            p.id, p.cc, sexLabels[p.sex], ageInYears(p.age),
+            p.demo, p.transport, zoneLabels[p.zone],
+          ]
             .join(' ')
             .toLowerCase()
             .includes(term)) &&
@@ -810,6 +906,7 @@ function renderZones(root) {
 
 function clearForm() {
   $('#patientForm').reset();
+  $('#patientLegacyDetails').hidden = true;
   $('#patientColor').value = '';
   $$('.triage-option').forEach((b) => b.classList.remove('selected'));
   $$('#interventionPicker input').forEach((i) => {
@@ -817,6 +914,52 @@ function clearForm() {
   });
   showError($('#patientError'), '');
   renderStockUsage();
+}
+function setPatientFormReadonly(readOnly) {
+  state.patientReadOnly = Boolean(readOnly);
+  const form = $('#patientForm');
+  if (!form) return;
+  form.classList.toggle('patient-form-readonly', state.patientReadOnly);
+  $('#patientReadOnlySummary').hidden = !state.patientReadOnly;
+  $('#patientEditorFields').hidden = state.patientReadOnly;
+  $$('input, select, textarea', form).forEach((input) => {
+    input.disabled = state.patientReadOnly;
+  });
+  $$('.triage-option', form).forEach((option) => {
+    option.disabled = state.patientReadOnly;
+  });
+  $('#editPatientBtn').hidden = !state.patientReadOnly;
+  $('#savePatientBtn').hidden = state.patientReadOnly;
+}
+function renderPatientSummary(patient) {
+  const root = $('#patientSummaryGrid');
+  if (!root) return;
+  root.replaceChildren();
+  const add = (label, value) => {
+    if (!value || value === '—') return;
+    const item = el('div', 'patient-summary-item');
+    item.append(el('dt', null, label));
+    const dd = el('dd', null, text(value));
+    item.append(dd);
+    root.append(item);
+  };
+  $('#patientSummaryTitle').textContent = 'ข้อมูลล่าสุด';
+  add('เพศ', sexLabels[patient.sex] || 'ไม่ทราบ');
+  add('อายุ', ageInYears(patient.age) || 'ไม่ทราบ');
+  add('ข้อมูลระบุตัวตนเดิม', patient.demo);
+  add('อาการสำคัญ / บาดแผล', patient.cc);
+  add('สี Triage', colorLabels[patient.color] || patient.color);
+  add('พื้นที่ปัจจุบัน', zoneLabels[patient.zone] || patient.zone);
+  add('จุดคัดแยก', points[patient.triagePoint] || patient.triagePoint);
+  add(
+    'สถานะชำระล้าง',
+    patient.deconStatus === 'none'
+      ? 'ไม่ต้องชำระล้าง'
+      : deconLabels[patient.deconStatus] || patient.deconStatus,
+  );
+  add('สัญญาณชีพ', vitalText(patient));
+  add('หัตถการที่ทำ', (patient.interventions || []).join(' · '));
+  add('รถพยาบาล / รพ.ปลายทาง', patient.transport);
 }
 function renderStockUsage() {
   const root = $('#stockUsagePicker');
@@ -842,10 +985,17 @@ function renderStockUsage() {
     root.append(label);
   });
 }
-function openPatient(id = '') {
+function openPatient(id = '', { fromQr = false } = {}) {
   if (!state.incident || (state.incident.closedAt && !id)) return;
   clearForm();
   const chartRequest = ++state.chartRequest;
+  state.chartFromQr = Boolean(fromQr);
+  setPatientFormReadonly(Boolean(fromQr));
+  $('#patientSummaryGrid').replaceChildren();
+  $('#editPatientBtn').hidden = true;
+  $('#patientSummaryTitle').textContent = fromQr
+    ? 'กำลังโหลดประวัติผู้ป่วย…'
+    : 'สรุปแฟ้มผู้ป่วย';
   state.selectedPatient = null;
   state.history = [];
   state.requestId =
@@ -872,6 +1022,7 @@ async function loadPatient(id, chartRequest) {
     const data = await api(`/api/patients/${encodeURIComponent(id)}`);
     if (!stillOpen()) return;
     if (!data.patient) {
+      setPatientFormReadonly(false);
       $('#dialogTitle').textContent = state.incident?.closedAt
         ? `แฟ้ม ${id}`
         : `ขึ้นทะเบียน ${id}`;
@@ -883,17 +1034,29 @@ async function loadPatient(id, chartRequest) {
     }
     state.selectedPatient = data.patient;
     fillPatient(data.patient);
+    renderPatientSummary(data.patient);
     state.history = data.history || [];
     $('#historyPanel').hidden = false;
     renderHistory();
     renderStockHistory(data.stockMovements || []);
-    $('#dialogMeta').textContent =
-      `แก้ไขล่าสุด ${fmtDate(data.patient.updatedAt)}`;
+    const readOnly = Boolean(
+      state.chartFromQr || state.incident?.closedAt || data.patient.deletedAt,
+    );
+    setPatientFormReadonly(readOnly);
+    $('#dialogTitle').textContent = readOnly ? `ประวัติผู้ป่วย ${id}` : `แฟ้ม ${id}`;
+    $('#dialogMeta').textContent = readOnly
+      ? `ข้อมูลล่าสุด ${fmtDate(data.patient.updatedAt)}`
+      : `แก้ไขล่าสุด ${fmtDate(data.patient.updatedAt)}`;
     $('#savePatientBtn').disabled = Boolean(
       state.incident?.closedAt || data.patient.deletedAt,
     );
-    if (data.patient.deletedAt)
+    $('#editPatientBtn').disabled = Boolean(
+      state.incident?.closedAt || data.patient.deletedAt,
+    );
+    if (data.patient.deletedAt) {
       $('#dialogMeta').textContent = 'แฟ้มนี้ถูกเก็บออกจากรายชื่อผู้ป่วยแล้ว';
+      $('#editPatientBtn').hidden = true;
+    }
   } catch (e) {
     if (!stillOpen()) return;
     $('#dialogMeta').textContent = 'เปิดแฟ้มไม่สำเร็จ';
@@ -901,8 +1064,11 @@ async function loadPatient(id, chartRequest) {
   }
 }
 function fillPatient(p) {
+  $('#patientLegacyDetails').hidden = !p.demo;
   Object.entries({
     patientId: p.id,
+    patientSex: p.sex,
+    patientAge: p.age,
     patientDemo: p.demo,
     patientZone: p.zone,
     patientTriagePoint: p.triagePoint,
@@ -916,7 +1082,7 @@ function fillPatient(p) {
     patientGcs: p.gcs,
   }).forEach(([id, value]) => {
     const node = $(`#${id}`);
-    if (node) node.value = value || '';
+    if (node) node.value = value ?? '';
   });
   $('#patientColor').value = p.color || '';
   $$('.triage-option').forEach((b) =>
@@ -941,7 +1107,15 @@ function renderHistory() {
       el(
         'small',
         null,
-        `${colorLabels[h.color] || text(h.color)} · ${zoneLabels[h.zone] || text(h.zone)} · ${vitalText(h)}`,
+        [
+          sexLabels[h.sex],
+          ageInYears(h.age),
+          colorLabels[h.color] || text(h.color),
+          zoneLabels[h.zone] || text(h.zone),
+          vitalText(h),
+        ]
+          .filter(Boolean)
+          .join(' · '),
       ),
     );
     root.append(item);
@@ -969,6 +1143,7 @@ function formBody() {
   const fd = new FormData(form);
   const body = Object.fromEntries(fd.entries());
   body.id = body.id.trim().toUpperCase();
+  body.age = body.age === '' ? null : Number(body.age);
   body.color = $('#patientColor').value;
   body.interventions = $$('#interventionPicker input:checked').map(
     (i) => i.value,
@@ -985,7 +1160,7 @@ function formBody() {
 async function savePatient(event) {
   event.preventDefault();
   const saveButton = $('#savePatientBtn');
-  if (saveButton.disabled) return;
+  if (saveButton.disabled || state.patientReadOnly) return;
   const body = formBody();
   if (!body.color) {
     showError($('#patientError'), 'กรุณาเลือกสี Triage ให้ชัดเจน');
@@ -993,6 +1168,9 @@ async function savePatient(event) {
   }
   if (!body.id && state.selectedPatient) body.id = state.selectedPatient.id;
   const isEdit = Boolean(state.selectedPatient);
+  const fromQr = state.chartFromQr;
+  const chartRequest = state.chartRequest;
+  const incidentId = state.incident.id;
   if (isEdit) body.version = state.selectedPatient.version;
   saveButton.disabled = true;
   try {
@@ -1002,25 +1180,43 @@ async function savePatient(event) {
         : '/api/patients',
       { method: isEdit ? 'PATCH' : 'POST', body },
     );
+    if (
+      state.incident?.id !== incidentId ||
+      state.chartRequest !== chartRequest ||
+      !$('#patientDialog').open
+    )
+      return;
     state.selectedPatient = result.patient;
     state.history = result.history || [];
     $$('#stockUsagePicker input').forEach((input) => {
       input.value = '0';
     });
-    notify('บันทึกข้อมูลผู้ป่วยแล้ว');
+    notify(`บันทึก ${result.patient.id} แล้ว`);
     $('#patientDialog').close();
+    if (fromQr && !isEdit) {
+      state.overview.nextPatientId = result.nextPatientId;
+      navigate('cards');
+    } else if (fromQr) {
+      openPatient(result.patient.id, { fromQr: true });
+    }
     await refresh();
   } catch (e) {
-    const message = /insuff|stock|เวชภัณฑ์/i.test(e.message)
-      ? e.message
-      : e.status === 409
-        ? /stale|version/i.test(e.message)
-          ? 'ข้อมูลถูกแก้ไขโดยเจ้าหน้าที่อื่น กรุณาปิดแล้วโหลดใหม่'
-          : e.message
-        : e.message;
+    if (state.chartRequest !== chartRequest || !$('#patientDialog').open)
+      return;
+    const message =
+      e.status === 409 && /duplicate patient id/i.test(e.message)
+        ? 'รหัสนี้มีแฟ้มแล้ว กรุณาเปิด QR ผู้ป่วยถัดไปสำหรับคนใหม่'
+        : /insuff|stock|เวชภัณฑ์/i.test(e.message)
+          ? e.message
+          : e.status === 409
+            ? /stale|version/i.test(e.message)
+              ? 'ข้อมูลถูกแก้ไขโดยเจ้าหน้าที่อื่น กรุณาปิดแล้วโหลดใหม่'
+              : e.message
+            : e.message;
     showError($('#patientError'), message);
   } finally {
-    saveButton.disabled = false;
+    if (state.chartRequest === chartRequest && !state.patientReadOnly)
+      saveButton.disabled = false;
   }
 }
 
@@ -1100,26 +1296,23 @@ async function enterApp() {
   $('#mobileUsername').textContent = state.session.username || '';
   $('#copyUsernameBtn').hidden = !state.session.username;
   renderNav();
-  navigate('overview');
   const qrPatientId = patientIdFromUrl();
-  const qrIncidentId = qrPatientId
-    ? new URLSearchParams(location.search).get('incident') || 'legacy'
-    : null;
+  const intakePage = !qrPatientId && location.hash === '#cards';
+  navigate(intakePage ? 'cards' : 'overview');
+  const qrIncidentId = qrIncidentFromUrl();
   try {
     await loadIncidents();
     const pinned = state.incidents.find((item) => item.id === qrIncidentId);
     const previous = state.incidents.find(
       (item) => item.id === sessionStorage.getItem('thaisim-incident'),
     );
-    const incident =
-      pinned ||
-      previous ||
-      state.incidents.find((item) => !item.closedAt) ||
-      state.incidents[0];
-    if (incident) await selectIncident(incident, { preserveQr: true });
+    const incident = qrIncidentId
+      ? pinned
+      : previous || state.incidents.find((item) => !item.closedAt) || state.incidents[0];
+    await selectIncident(incident || null, { preserveQr: true });
     if (qrPatientId && pinned && state.incident?.id === pinned.id)
-      openPatient(qrPatientId);
-    else if (qrPatientId && !pinned) notify('ไม่พบเหตุการณ์ที่ระบุในการ์ดนี้', 'error');
+      openPatient(qrPatientId, { fromQr: true });
+    else if (intakePage) navigate('cards');
     startLiveUpdates();
     clearInterval(state.presenceTimer);
     state.presenceTimer = setInterval(sendPresence, 30_000);
@@ -1155,6 +1348,8 @@ function leaveApp() {
   if ($('#patientDialog').open) $('#patientDialog').close();
   state.session = null;
   state.incident = null;
+  ++state.incidentListRequest;
+  state.incidents = [];
   state.overview = { patients: [], stock: [] };
   state.live?.close();
   state.live = null;
@@ -1181,7 +1376,7 @@ function startLiveUpdates() {
     async refresh(changes) {
       const accountId = state.session?.id;
       const scope = state.incident?.id;
-      if (!accountId || !scope) return;
+      if (!accountId) return;
       try {
         const all = changes.some((item) => item.resource === 'all');
         const incidentsChanged =
@@ -1202,6 +1397,7 @@ function startLiveUpdates() {
         }
         if (state.session?.id !== accountId || state.incident?.id !== scope)
           return;
+        if (incidentsChanged && await reconcileIncidentSelection()) return;
         if (
           incidentsChanged ||
           changes.some((item) => !item.incidentId || item.incidentId === scope)
@@ -1249,6 +1445,20 @@ document.addEventListener('DOMContentLoaded', () => {
   );
   document.addEventListener('visibilitychange', sendPresence);
   $('#patientForm').addEventListener('submit', savePatient);
+  $('#editPatientBtn').addEventListener('click', () => {
+    if (
+      !state.selectedPatient ||
+      state.incident?.closedAt ||
+      state.selectedPatient.deletedAt
+    )
+      return;
+    setPatientFormReadonly(false);
+    $('#dialogTitle').textContent =
+      `บันทึกเพิ่มเติม · แฟ้ม ${state.selectedPatient.id}`;
+    $('#dialogMeta').textContent =
+      `แก้ไขล่าสุด ${fmtDate(state.selectedPatient.updatedAt)}`;
+    $('#savePatientBtn').disabled = false;
+  });
   $('#closeDialogBtn').addEventListener('click', () =>
     $('#patientDialog').close(),
   );

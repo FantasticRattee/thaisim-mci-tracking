@@ -9,26 +9,6 @@ const esc = (v) =>
         c
       ],
   );
-export const normalizeCardCount = (value) =>
-  Math.max(
-    1,
-    Math.min(
-      500,
-      Number.isFinite(Number(value)) && Number(value) > 0
-        ? Math.floor(Number(value))
-        : 12,
-    ),
-  );
-export const normalizeStartCode = (value) =>
-  Math.max(
-    1,
-    Math.min(
-      999999,
-      Number.isFinite(Number(value)) && Number(value) > 0
-        ? Math.floor(Number(value))
-        : 1,
-    ),
-  );
 export const filterChemicals = (items, query) => {
   const q = String(query || '')
     .trim()
@@ -185,69 +165,93 @@ function renderErg(root) {
 export function qrImagePath(code, incidentId = 'legacy') {
   return `/api/qr/${encodeURIComponent(code)}.png?incident=${encodeURIComponent(incidentId)}`;
 }
-function qrCard(code, index, incidentId, incidentName) {
-  return `<article class="qr-card">
-    <div class="qr-caption"><strong>${code}</strong><span>${esc(incidentName || 'ThaiSIM MCI · การ์ดฝึกซ้อม')}</span></div>
-    <a class="qr-link" href="${esc(patientLink(code, incidentId))}" aria-label="เปิดแฟ้ม ${code}" title="เปิดแฟ้ม ${code}">
-      <img src="${qrImagePath(code, incidentId)}" alt="QR สำหรับรหัส ${code}" loading="${index < 12 ? 'eager' : 'lazy'}" width="115" height="115">
-    </a>
-    <div class="qr-bands"><span class="badge badge-red">แดง</span><span class="badge badge-yellow">เหลือง</span><span class="badge badge-green">เขียว</span><span class="badge badge-black">ดำ</span></div>
-  </article>`;
-}
-function renderCards(root, notify, incidentId, incidentName) {
-  root.innerHTML =
-    pageHead('พิมพ์การ์ด QR', 'แตะรูป QR หรือสแกนด้วยกล้องเพื่อเปิดแฟ้มผู้ป่วยของเหตุการณ์นี้') +
-    `<section class="panel"><form class="qr-controls">
-    <label class="field"><span>จำนวนบัตร</span><input name="count" type="number" min="1" max="500" value="12" aria-describedby="qr-help" required></label>
-    <label class="field"><span>รหัสเริ่มต้น</span><input name="start" type="number" min="1" max="999999" value="1" required></label>
-    <div class="page-actions"><button class="btn btn-secondary" type="submit">สร้างตัวอย่าง</button><button class="btn btn-primary qr-print" type="button">พิมพ์</button></div>
-    </form><small id="qr-help">พิมพ์ได้ครั้งละ 1–500 ใบ การ์ดผูกกับเหตุการณ์ที่เลือก</small></section><section id="print-area" class="qr-grid" aria-label="ตัวอย่างการ์ด QR"></section>`;
-  const form = root.querySelector('.qr-controls');
-  const area = root.querySelector('#print-area');
-  let range = '';
-  function draw() {
-    const data = Object.fromEntries(new FormData(form));
-    const count = normalizeCardCount(data.count);
-    const start = normalizeStartCode(data.start);
-    if (start + count - 1 > 999999) {
-      notify('รหัสสุดท้ายต้องไม่เกิน MCI-999999', 'error');
-      return false;
-    }
-    const next = `${start}:${count}`;
-    if (next === range) return true;
-    range = next;
-    area.innerHTML = Array.from({ length: count }, (_, i) =>
-      qrCard(
-        `MCI-${String(start + i).padStart(3, '0')}`,
-        i,
-        incidentId,
-        incidentName,
-      ),
-    ).join('');
-    return true;
+export function updateNextPatientCard(
+  root,
+  { nextPatientId, incidentId, incidentName, incidentClosed } = {},
+) {
+  const card = root?.querySelector?.('[data-next-patient-card]');
+  if (!card) return;
+  const id = nextPatientId || '';
+  const closed = Boolean(incidentClosed);
+  const available = Boolean(id) && !closed;
+  const link = card.querySelector('.next-patient-link');
+  const image = card.querySelector('.next-patient-qr');
+  const idLabel = card.querySelector('.next-patient-id');
+  const incidentLabel = card.querySelector('.next-patient-incident');
+  const empty = card.querySelector('.next-patient-empty');
+  const content = card.querySelector('.next-patient-content');
+  incidentLabel.textContent = incidentName || 'ยังไม่ได้เลือกเหตุการณ์';
+  empty.textContent = closed
+    ? 'เหตุการณ์นี้ปิดรับผู้ป่วยแล้ว'
+    : 'กำลังโหลดรหัสผู้ป่วย…';
+  empty.hidden = available;
+  content.hidden = !available;
+  if (!available) return;
+  const href = patientLink(id, incidentId || 'legacy');
+  link.href = href;
+  link.setAttribute('aria-label', `เปิดแฟ้ม ${id}`);
+  link.title = `เปิดแฟ้ม ${id}`;
+  const imagePath = qrImagePath(id, incidentId || 'legacy');
+  if (image.getAttribute('src') !== imagePath) {
+    // Swap image nodes so the previous patient's QR cannot remain visible under the new number.
+    const nextImage = document.createElement('img');
+    nextImage.className = image.className;
+    nextImage.width = nextImage.height = 150;
+    nextImage.alt = `QR สำหรับรหัส ${id}`;
+    nextImage.src = imagePath;
+    image.replaceWith(nextImage);
   }
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    draw();
-  });
-  const print = root.querySelector('.qr-print');
-  print.addEventListener('click', async () => {
-    if (!form.reportValidity() || !draw()) return;
-    print.disabled = true;
-    try {
-      const images = [...area.querySelectorAll('img')];
-      images.forEach((img) => {
-        img.loading = 'eager';
-      });
-      await Promise.all(images.map((img) => img.decode()));
-      if (print.isConnected && !root.hidden) window.print();
-    } catch {
-      notify('โหลด QR ไม่ครบ กรุณารีเฟรชหน้าแล้วลองใหม่', 'error');
-    } finally {
-      print.disabled = false;
+  idLabel.textContent = id;
+}
+async function printCurrentCard(root, button, notify) {
+  const image = root.querySelector('.next-patient-qr');
+  const content = root.querySelector('.next-patient-content');
+  if (button.disabled || root.hidden || content.hidden) return;
+  button.disabled = true;
+  let sheet;
+  try {
+    await image.decode();
+    if (root.hidden || !root.contains(button)) return;
+    if (content.hidden || !content.contains(image)) {
+      notify('QR เปลี่ยนแล้ว กรุณากดพิมพ์ใบที่แสดงอีกครั้ง', 'error');
+      return;
     }
-  });
-  draw();
+    // Freeze the decoded pixels with their labels while the live intake board keeps updating.
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    canvas.getContext('2d').drawImage(image, 0, 0);
+    const code = document.createElement('strong');
+    code.textContent = root.querySelector('.next-patient-id').textContent;
+    const caption = document.createElement('figcaption');
+    caption.textContent = root.querySelector('.next-patient-incident').textContent;
+    sheet = document.createElement('figure');
+    sheet.className = 'printed-patient-qr';
+    sheet.append(canvas, code, caption);
+    document.querySelector('.printed-patient-qr')?.remove();
+    document.body.append(sheet);
+    window.addEventListener('afterprint', () => sheet.remove(), { once: true });
+    window.print();
+  } catch {
+    sheet?.remove();
+    if (root.contains(button) && !root.hidden)
+      notify('พิมพ์ QR ไม่สำเร็จ กรุณารีเฟรชหน้าแล้วลองอีกครั้ง', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderCards(root, cardState, notify) {
+  root.innerHTML =
+    pageHead('QR ผู้ป่วย', 'แตะหรือสแกน QR เพื่อเปิดแฟ้มของผู้ป่วยในเหตุการณ์นี้') +
+    `<section class="panel next-patient-card" data-next-patient-card aria-labelledby="next-patient-title">
+      <div class="panel-head"><div><h2 id="next-patient-title">QR ผู้ป่วยคนถัดไป</h2><p class="next-patient-incident"></p></div></div>
+      <div class="next-patient-content"><a class="next-patient-link"><img class="next-patient-qr" alt="" width="150" height="150"><strong class="next-patient-id" aria-live="polite"></strong></a><div class="next-patient-purpose"><p>เมื่อบันทึกข้อมูลสำเร็จ QR ของผู้ป่วยคนถัดไปจะขึ้นตรงนี้อัตโนมัติ</p><p>สแกน QR ใบเดิมอีกครั้งเพื่อดูประวัติผู้ป่วยคนนั้น</p><button type="button" class="btn btn-secondary print-current-qr">พิมพ์ QR ใบนี้</button></div></div>
+      <p class="next-patient-empty" hidden></p>
+    </section>`;
+  updateNextPatientCard(root, cardState);
+  const print = root.querySelector('.print-current-qr');
+  print.addEventListener('click', () => printCurrentCard(root, print, notify));
 }
 
 export function renderExtras(
@@ -259,7 +263,12 @@ export function renderExtras(
     return renderStock(root, state, api, notify, incidentClosed);
   else if (page === 'erg') renderErg(root);
   else if (page === 'cards')
-    renderCards(root, notify, incidentId, incidentName);
+    renderCards(root, {
+      incidentId,
+      incidentName,
+      nextPatientId: state?.nextPatientId,
+      incidentClosed,
+    }, notify);
   else root.innerHTML = '<p class="empty">ไม่พบหน้าที่เลือก</p>';
   return root;
 }

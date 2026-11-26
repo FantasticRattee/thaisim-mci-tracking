@@ -72,11 +72,33 @@ export function registerManagementRoutes(
       .all();
     return res.json({
       canManage: allowed,
+      canDeleteIncidents: allowed,
       patients,
       accounts: allowed ? listAccounts(db) : [],
       incidents,
       incident,
     });
+  });
+
+  app.delete('/api/manage/incidents/:id', auth, manage, (req, res) => {
+    const id = req.params.id;
+    let inTransaction = false;
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      inTransaction = true;
+      if (!db.prepare('SELECT 1 FROM incidents WHERE id=?').get(id))
+        throw Object.assign(new Error('ไม่พบเหตุการณ์'), { status: 404 });
+      for (const table of ['staff_presence', 'incident_mutations', 'stock_movements', 'history', 'patients', 'stock']) {
+        db.prepare(`DELETE FROM ${table} WHERE incidentId=?`).run(id);
+      }
+      db.prepare('DELETE FROM incidents WHERE id=?').run(id);
+      db.exec('COMMIT');
+      inTransaction = false;
+      return res.json({ deleted: id, incidentId: id });
+    } catch (error) {
+      if (inTransaction) db.exec('ROLLBACK');
+      return sendError(res, error);
+    }
   });
 
   app.post('/api/manage/staff', auth, manage, (req, res) => {

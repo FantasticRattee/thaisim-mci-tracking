@@ -2,9 +2,6 @@ const assert = require('assert');
 (async () => {
   const extras = await import('../public/extras.js');
   const { ERG_SOURCES } = await import('../public/erg-data.js');
-  assert.strictEqual(extras.normalizeCardCount(0), 12);
-  assert.strictEqual(extras.normalizeCardCount(501), 500);
-  assert.strictEqual(extras.normalizeStartCode('42'), 42);
   const links = await import('../public/patient-link.js').catch(() => ({}));
   assert.strictEqual(
     links.patientLink?.('MCI-010', 'exercise-a'),
@@ -26,4 +23,5 @@ const assert = require('assert');
     extras.filterChemicals([{ nameThai: 'คลอรีน', un: '1017' }], '1017').length,
     1,
   );
+  assert.strictEqual(typeof extras.updateNextPatientCard, 'function');
 })();

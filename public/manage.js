@@ -1,5 +1,6 @@
 /* Management view for the selected exercise incident.  The parent owns auth,
  * incident selection, patient dialog, toast, and the API wrapper. */
+import { sexLabels, ageInYears } from './patient-demographics.js';
 
 const text = (value, fallback = '—') =>
   value === undefined || value === null || value === ''
@@ -71,6 +72,17 @@ function button(label, className, handler, disabled = false) {
     label,
   );
 }
+function deleteButton(label, handler, disabled = false) {
+  const remove = button('', 'btn-danger manage-delete', handler, disabled);
+  remove.title = label;
+  remove.setAttribute('aria-label', label);
+  remove.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true" focusable="false">
+    <path d="M3.5 6.5h17M9 6.5v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 6.5l.8 13a1.6 1.6 0 0 0 1.6 1.5h7.2a1.6 1.6 0 0 0 1.6-1.5l.8-13M10 10v7M14 10v7"/>
+  </svg>`;
+  return remove;
+}
 function field(label, name, value, state, options = {}) {
   const wrap = el('label', { class: 'manage-field' });
   wrap.append(el('span', { class: 'manage-label', text: label }));
@@ -120,12 +132,15 @@ export function mountManagement(root, options = {}) {
   if (!root) throw new Error('mountManagement ต้องได้รับ root element');
   const state = {
     data: { patients: [], accounts: [], incident: options.incident },
-    tab: 'patients',
+    tab: ['patients', 'staff', 'incidents'].includes(options.initialTab)
+      ? options.initialTab
+      : 'patients',
     query: '',
     form: null,
     destroyed: false,
     refs: {},
     request: 0,
+    deletingIncidents: new Set(),
   };
   const api = options.api;
   if (typeof api !== 'function')
@@ -134,6 +149,9 @@ export function mountManagement(root, options = {}) {
 
   function canManage() {
     return Boolean(state.data.canManage ?? options.canManage);
+  }
+  function canDeleteIncidents() {
+    return canManage() && state.data.canDeleteIncidents === true;
   }
   function setNotice(message, type = 'error') {
     const node = state.refs.notice;
@@ -146,9 +164,12 @@ export function mountManagement(root, options = {}) {
     const q = state.query.trim().toLocaleLowerCase();
     return !q
       ? items
-      : items.filter((item) =>
-          JSON.stringify(item).toLocaleLowerCase().includes(q),
-        );
+      : items.filter((item) => {
+          const terms = [JSON.stringify(item)];
+          if (state.tab === 'patients')
+            terms.push(sexLabels[item.sex], ageInYears(item.age));
+          return terms.join(' ').toLocaleLowerCase().includes(q);
+        });
   }
   function renderShell() {
     root.replaceChildren();
@@ -277,6 +298,7 @@ export function mountManagement(root, options = {}) {
   }
   function renderPatients(rows) {
     const table = el('table', { class: 'manage-table' });
+    const showLegacyDetails = state.data.patients.some((patient) => patient.demo);
     table.append(
       el(
         'thead',
@@ -285,7 +307,9 @@ export function mountManagement(root, options = {}) {
           const tr = el('tr');
           [
             'รหัส',
-            'รายละเอียดผู้ป่วย',
+            'เพศ',
+            'อายุ',
+            ...(showLegacyDetails ? ['ข้อมูลระบุตัวตนเดิม'] : []),
             'สถานะ',
             'อาการหลัก',
             'อัปเดต',
@@ -304,7 +328,9 @@ export function mountManagement(root, options = {}) {
       open.setAttribute('aria-label', `เปิดแฟ้มผู้ป่วย ${patient.id}`);
       tr.append(
         el('td', { class: 'manage-code' }, open),
-        el('td', {}, text(patient.demo)),
+        el('td', {}, sexLabels[patient.sex] || 'ไม่ทราบ'),
+        el('td', {}, ageInYears(patient.age) || 'ไม่ทราบ'),
+        ...(showLegacyDetails ? [el('td', {}, text(patient.demo))] : []),
         el('td', {}, patientStatus(patient)),
         el('td', {}, text(patient.cc)),
         el('td', {}, date(patient.updatedAt)),
@@ -317,7 +343,7 @@ export function mountManagement(root, options = {}) {
       );
       if (canManage() && !incidentClosed())
         actions.append(
-          button('ลบ', 'btn-danger btn-sm', () => deletePatient(patient)),
+          deleteButton(`ลบผู้ป่วย ${patient.id}`, () => deletePatient(patient)),
         );
       tr.append(actions);
       body.append(tr);
@@ -351,7 +377,7 @@ export function mountManagement(root, options = {}) {
         );
         if (!isProtectedStaff(options.staff, staff))
           actions.append(
-            button('ลบ', 'btn-danger btn-sm', () => deleteStaff(staff)),
+            deleteButton(`ลบเจ้าหน้าที่ ${staff.username}`, () => deleteStaff(staff)),
           );
       } else actions.append(el('span', { class: 'muted', text: 'ดูอย่างเดียว' }));
       tr.append(actions);
@@ -392,6 +418,13 @@ export function mountManagement(root, options = {}) {
           options.selectIncident?.(incident),
         ),
       );
+      if (canDeleteIncidents()) {
+        actions.append(deleteButton(
+          `ลบเหตุการณ์ ${incident.name}`,
+          () => deleteIncident(incident),
+          state.deletingIncidents.has(incident.id),
+        ));
+      }
       row.append(actions);
       body.append(row);
     });
@@ -516,7 +549,7 @@ export function mountManagement(root, options = {}) {
     if (incidentClosed()) return setNotice('เหตุการณ์ปิดแล้ว ไม่สามารถลบผู้ป่วยได้');
     if (
       !window.confirm(
-        `ยืนยันลบผู้ป่วยจากเหตุการณ์ “${state.data.incident?.name || options.incident?.name || 'เหตุการณ์นี้'}”\nรหัส: ${patient.id}\nการลบนี้กู้คืนจากหน้าจอนี้ไม่ได้`,
+        `นำ ${patient.id} ออกจากรายชื่อผู้ป่วยในเหตุการณ์ “${state.data.incident?.name || options.incident?.name || 'เหตุการณ์นี้'}” หรือไม่?\nQR ใบเดิมจะเปิดประวัติได้อย่างเดียว และรหัสนี้จะยังเป็นของผู้ป่วยคนเดิม`,
       )
     )
       return;
@@ -525,11 +558,32 @@ export function mountManagement(root, options = {}) {
         method: 'DELETE',
         body: { version: patient.version },
       });
-      notify(`ลบผู้ป่วย ${patient.id} แล้ว`);
+      notify(`นำ ${patient.id} ออกจากรายชื่อผู้ป่วยแล้ว`);
       await controllerRefresh();
       options.refresh?.();
     } catch (error) {
       setNotice(errorText(error));
+    }
+  }
+  async function deleteIncident(incident) {
+    if (!canDeleteIncidents() || state.deletingIncidents.has(incident.id)) return;
+    if (!window.confirm(
+      `ลบเหตุการณ์ “${incident.name}” อย่างถาวรหรือไม่?\nแฟ้มผู้ป่วย ประวัติการบันทึก และข้อมูลคลังเวชภัณฑ์รวมถึงรายการเบิกใช้ของเหตุการณ์นี้จะถูกลบทั้งหมด QR เดิมจะเปิดแฟ้มผู้ป่วยไม่ได้อีก`,
+    )) return;
+    state.deletingIncidents.add(incident.id);
+    renderList();
+    try {
+      await api(`/api/manage/incidents/${encodeURIComponent(incident.id)}`, {
+        method: 'DELETE',
+      });
+      notify(`ลบเหตุการณ์ “${incident.name}” อย่างถาวรแล้ว`);
+      await options.onIncidentDeleted?.(incident.id);
+      if (!state.destroyed) await controllerRefresh();
+    } catch (error) {
+      if (!state.destroyed) setNotice(errorText(error));
+    } finally {
+      state.deletingIncidents.delete(incident.id);
+      if (!state.destroyed) renderList();
     }
   }
   async function deleteStaff(staff) {
@@ -587,5 +641,5 @@ export function mountManagement(root, options = {}) {
   }
   render();
   controllerRefresh();
-  return { refresh: controllerRefresh, destroy };
+  return { refresh: controllerRefresh, getTab: () => state.tab, destroy };
 }
