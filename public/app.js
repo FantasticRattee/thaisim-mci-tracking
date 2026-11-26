@@ -253,11 +253,13 @@ function renderOverview(root) {
   zonePanel.append(el('h2', 'panel-head', 'แยกตามพื้นที่'));
   const zoneList = el('div', 'summary-list');
   Object.entries(zoneLabels).forEach(([zone, label]) => {
-    const row = el(
-      'button',
-      'summary-row',
-      `${label} · ${patients.filter((p) => p.zone === zone).length}`,
+    const count = patients.filter((p) => p.zone === zone).length;
+    const row = el('button', 'summary-row');
+    row.append(
+      el('span', null, label),
+      el('strong', 'summary-count', String(count)),
     );
+    row.setAttribute('aria-label', `${label} ${count} เคส`);
     row.type = 'button';
     row.addEventListener('click', () => {
       state.filterQuery = '';
@@ -297,16 +299,13 @@ function renderOverview(root) {
   );
   const overviewGrid = el('div', 'overview-grid');
   overviewGrid.append(colorPanel, zonePanel);
-  root.replaceChildren(
-    pageHead(
-      'ภาพรวมสถานการณ์',
-      `ผู้ปฏิบัติงาน: ${state.session.name} · ${state.session.org}`,
-      button('+ บันทึกเคสใหม่', 'btn-primary', () => openPatient()),
-    ),
-    grid,
-    overviewGrid,
-    recent,
+  const heading = pageHead(
+    'ภาพรวมสถานการณ์',
+    `${state.session.name} · ${state.session.org} · ${state.session.opZone}`,
+    button('+ บันทึกเคสใหม่', 'btn-primary', () => openPatient()),
   );
+  heading.classList.add('overview-heading');
+  root.replaceChildren(heading, grid, overviewGrid, recent);
 }
 function patientTable(patients) {
   const wrap = el('div', 'table-wrap patient-table');

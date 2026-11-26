@@ -3,25 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#102a43" />
+    <meta name="theme-color" content="#f7f9f7" />
     <title>ThaiSIM MCI Tracking</title>
+    <link
+      rel="preload"
+      href="./fonts/noto-sans-thai-thai.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div id="app" class="app-root">
       <section id="authView" class="auth-shell" aria-labelledby="authTitle">
         <div class="auth-card">
-          <div class="brand auth-brand">
-            <span class="brand-mark" aria-hidden="true">+</span
-            ><span class="brand-copy"
-              ><strong>ThaiSIM MCI</strong
-              ><small>Incident tracking</small></span
-            >
-          </div>
-          <p class="eyebrow">สนามปฏิบัติการ / INCIDENT COMMAND</p>
-          <h1 id="authTitle">เข้าสู่ระบบเจ้าหน้าที่</h1>
-          <p class="notice">ระบบฝึกซ้อม กรุณาใช้ข้อมูลผู้ป่วยสมมติเท่านั้น</p>
-          <p class="muted">กรอกรหัสที่ผู้จัดการการฝึกซ้อมมอบให้เพื่อเปิดแดชบอร์ด</p>
+          <header class="auth-header">
+            <div class="brand auth-brand">
+              <span class="brand-mark" aria-hidden="true">+</span>
+              <strong>ThaiSIM MCI</strong>
+            </div>
+            <h1 id="authTitle">เข้าสู่ระบบเจ้าหน้าที่</h1>
+            <p>ระบบฝึกซ้อมติดตามผู้ป่วยสาธารณภัยหมู่</p>
+          </header>
           <form id="loginForm" class="auth-form" novalidate>
             <label for="passcode"
               >รหัสเข้าสู่ระบบ <span aria-hidden="true">*</span></label
@@ -32,7 +36,7 @@
               type="password"
               required
               autocomplete="current-password"
-              placeholder="รหัสส่วนตัว"
+              placeholder="รหัสจากผู้จัดการการฝึกซ้อม"
             />
             <label for="staffName"
               >ชื่อผู้ปฏิบัติงาน <span aria-hidden="true">*</span></label
@@ -86,7 +90,7 @@
               เข้าสู่ระบบ
             </button>
           </form>
-          <p class="hint">ขอรหัสเข้าสู่ระบบจากผู้จัดการการฝึกซ้อม</p>
+          <p class="hint">ใช้ชื่อและข้อมูลผู้ป่วยสมมติในการฝึกซ้อม</p>
         </div>
       </section>
 
