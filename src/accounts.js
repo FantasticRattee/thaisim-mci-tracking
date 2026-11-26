@@ -2,6 +2,8 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const presenceTimeout = 90_000;
 const sessionDuration = 12 * 60 * 60 * 1000;
+const demoUsername = 'DemoThaiSIM001';
+const oldDemoUsername = 'Demo-ThaiSIM/001';
 const accountFields =
   'id, username, name, org, callSign, personnelCode, duty, opZone, version, updatedAt';
 
@@ -24,6 +26,10 @@ export function initAccounts(db) {
     CREATE TABLE IF NOT EXISTS staff_auto_codes (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT
     );
+    CREATE TABLE IF NOT EXISTS staff_login_aliases (
+      usernameKey TEXT PRIMARY KEY,
+      staffId TEXT NOT NULL REFERENCES staff_accounts(id)
+    );
     CREATE TABLE IF NOT EXISTS staff_presence (
       sessionId TEXT PRIMARY KEY,
       staffId TEXT NOT NULL REFERENCES staff_accounts(id),
@@ -33,6 +39,53 @@ export function initAccounts(db) {
     CREATE INDEX IF NOT EXISTS staff_presence_incident
       ON staff_presence(incidentId, lastSeenAt, staffId);
   `);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const oldDemoKey = normalizeUsername(oldDemoUsername);
+    const existingDemo = db
+      .prepare('SELECT 1 FROM staff_accounts WHERE usernameKey IN (?, ?)')
+      .get(normalizeUsername(demoUsername), oldDemoKey);
+    if (!existingDemo) {
+      createAccount(db, {
+        name: 'Demo',
+        org: 'ThaiSIM',
+        personnelCode: '001',
+        duty: 'Paramedic',
+        opZone: 'Primary Triage',
+      });
+    }
+    const legacy = db
+      .prepare(
+        `
+      SELECT id, name, org, personnelCode, usernameKey FROM staff_accounts
+      WHERE instr(username, '/') > 0 ORDER BY (usernameKey = ?) DESC, rowid
+    `,
+      )
+      .all(oldDemoKey);
+    const alias = db.prepare(
+      'INSERT INTO staff_login_aliases (usernameKey, staffId) VALUES (?, ?)',
+    );
+    const rename = db.prepare(
+      'UPDATE staff_accounts SET username=?, usernameKey=?, version=version+1, updatedAt=? WHERE id=?',
+    );
+    for (const account of legacy) {
+      const username =
+        account.usernameKey === oldDemoKey
+          ? demoUsername
+          : assignUsername(db, account, true).username;
+      alias.run(account.usernameKey, account.id);
+      rename.run(
+        username,
+        normalizeUsername(username),
+        new Date().toISOString(),
+        account.id,
+      );
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function accountError(message, status = 400) {
@@ -100,30 +153,34 @@ export function listAccounts(db) {
     .all();
 }
 
-export function createAccount(db, input) {
-  const profile = validateProfile(input);
-  const base = [`${profile.name}-${profile.org}`, profile.callSign]
-    .filter(Boolean)
-    .join('/');
-  const automatic = profile.personnelCode === '000';
-  let username;
-  let key;
-  const findUsername = db.prepare(
+function assignUsername(db, profile, migrating = false) {
+  const compact = (value) => value.normalize('NFKC').replace(/[\s/]+/gu, '');
+  const prefix = compact(profile.name + profile.org);
+  const inUse = db.prepare(
     'SELECT 1 FROM staff_accounts WHERE usernameKey = ?',
   );
-  do {
-    if (automatic) {
-      const next = db
-        .prepare('INSERT INTO staff_auto_codes DEFAULT VALUES')
-        .run();
-      profile.personnelCode = String(next.lastInsertRowid).padStart(3, '0');
-    }
-    username = `${base}/${profile.personnelCode}`;
-    key = normalizeUsername(username);
-    if (!findUsername.get(key)) break;
-    if (!automatic)
-      throw accountError('มี username นี้แล้ว กรุณาใช้ username เดิมเข้าสู่ระบบ', 409);
-  } while (true);
+  const digitsOrLetters = Array.from(compact(profile.personnelCode));
+  if (profile.personnelCode !== '000' && digitsOrLetters.length) {
+    const suffix = ['0', '0', ...digitsOrLetters].slice(-3).join('');
+    const username = prefix + suffix;
+    if (!inUse.get(normalizeUsername(username)))
+      return { username, personnelCode: profile.personnelCode };
+    if (!migrating) throw accountError('ชื่อผู้ใช้นี้มีผู้ลงทะเบียนแล้ว', 409);
+  }
+  const nextCode = db.prepare('INSERT INTO staff_auto_codes DEFAULT VALUES');
+  for (let attempt = 0; attempt < 999; attempt++) {
+    const sequence = Number(nextCode.run().lastInsertRowid);
+    const personnelCode = String(((sequence - 1) % 999) + 1).padStart(3, '0');
+    const username = prefix + personnelCode;
+    if (!inUse.get(normalizeUsername(username)))
+      return { username, personnelCode };
+  }
+  throw accountError('รหัสสามหลักสำหรับชื่อเล่นและสังกัดนี้ถูกใช้ครบแล้ว', 409);
+}
+
+export function createAccount(db, input) {
+  const profile = validateProfile(input);
+  const { username, personnelCode } = assignUsername(db, profile);
   const id = randomUUID();
   db.prepare(
     `
@@ -134,11 +191,11 @@ export function createAccount(db, input) {
   ).run(
     id,
     username,
-    key,
+    normalizeUsername(username),
     profile.name,
     profile.org,
     profile.callSign,
-    profile.personnelCode,
+    personnelCode,
     profile.duty,
     profile.opZone,
     new Date().toISOString(),
@@ -256,9 +313,17 @@ export function registerAccountRoutes(
       .get(incidentId, clock() - presenceTimeout).amount;
   }
 
-  app.get('/api/session', (req, res) =>
-    res.json({ staff: session(req)?.staff || null }),
-  );
+  app.get('/api/session', (req, res) => {
+    const demo = db
+      .prepare(
+        'SELECT username FROM staff_accounts WHERE usernameKey = ? AND deletedAt IS NULL',
+      )
+      .get(normalizeUsername(demoUsername));
+    res.json({
+      staff: session(req)?.staff || null,
+      demoUsername: demo?.username || null,
+    });
+  });
   app.post('/api/session', (req, res) => {
     const key = normalizeUsername(req.body?.username);
     const account =
@@ -267,10 +332,11 @@ export function registerAccountRoutes(
       db
         .prepare(
           `
-      SELECT ${accountFields} FROM staff_accounts WHERE usernameKey = ? AND deletedAt IS NULL
+      SELECT ${accountFields} FROM staff_accounts WHERE deletedAt IS NULL
+        AND (usernameKey = ? OR id = (SELECT staffId FROM staff_login_aliases WHERE usernameKey = ?))
     `,
         )
-        .get(key);
+        .get(key, key);
     if (!account)
       return res
         .status(401)

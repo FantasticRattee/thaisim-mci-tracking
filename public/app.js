@@ -558,8 +558,14 @@ function patientTable(patients) {
   }
   patients.forEach((p) => {
     const row = el('tr');
+    const codeCell = el('td', 'patient-code');
+    const openByCode = button(text(p.id), 'patient-code-link', () =>
+      openPatient(p.id),
+    );
+    openByCode.setAttribute('aria-label', `เปิดแฟ้ม ${p.id}`);
+    codeCell.append(openByCode);
     row.append(
-      el('td', 'patient-code', text(p.id)),
+      codeCell,
       tdBadge(p.color),
       el(
         'td',
@@ -953,6 +959,10 @@ async function savePatient(event) {
 async function loadSession() {
   try {
     const result = await api('/api/session');
+    if (result?.demoUsername) {
+      $('#demoUsername').textContent = result.demoUsername;
+      $('#demoLoginNote').hidden = false;
+    }
     if (result?.staff) {
       state.session = result.staff;
       enterApp();
@@ -1088,12 +1098,27 @@ async function logout() {
   $('#mainView').hidden = true;
   $('#authView').hidden = false;
   $('#loginForm').reset();
+  setAuthMode('login');
 }
 document.addEventListener('DOMContentLoaded', () => {
   $('#loginForm').addEventListener('submit', login);
   $('#registerForm').addEventListener('submit', register);
   $('#loginTab').addEventListener('click', () => setAuthMode('login'));
   $('#registerTab').addEventListener('click', () => setAuthMode('register'));
+  $('#copyDemoUsername').addEventListener('click', async () => {
+    const username = $('#demoUsername').textContent;
+    const input = $('#username');
+    input.value = username;
+    showError($('#loginError'), '');
+    try {
+      await navigator.clipboard.writeText(username);
+      notify('คัดลอกชื่อผู้ใช้เดโมแล้ว');
+    } catch {
+      input.focus();
+      input.select();
+      notify('เลือกชื่อไว้ในช่องแล้ว กดคัดลอกหรือเข้าสู่ระบบได้เลย');
+    }
+  });
   $('#copyUsernameBtn').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(state.session.username);

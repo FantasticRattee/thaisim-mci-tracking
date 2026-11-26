@@ -46,7 +46,7 @@ test('health and session are public while data routes require signed session', a
   });
   assert.equal(signed.res.status, 201);
   assert.equal(signed.body.staff.name, 'Nok');
-  assert.match(signed.body.username, /^Nok-EMS\/[0-9]+$/);
+  assert.match(signed.body.username, /^NokEMS[0-9]{3}$/);
   assert.equal((await request('/api/overview')).body.patients.length, 4);
 });
 
