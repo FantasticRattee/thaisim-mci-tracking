@@ -1,6 +1,9 @@
 // ERG reference index. Guide numbers are from official ERG2024/ERG4Thai indexes;
 // this directory is an index only, not emergency treatment advice.
 export const ERG_SOURCES = {
+  web: 'https://www.erg4thai.com/web/',
+  ios: 'https://apps.apple.com/th/app/erg4thai/id1514892942',
+  android: 'https://play.google.com/store/apps/details?id=th.pcd.erg',
   thai: 'https://www.pcd.go.th/wp-content/uploads/2025/04/pcdnew-2025-04-24_06-57-55_686522.pdf',
   phmsa:
     'https://www.phmsa.dot.gov/training/hazmat/erg/emergency-response-guidebook-erg',

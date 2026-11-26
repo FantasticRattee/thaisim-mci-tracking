@@ -46,7 +46,10 @@ const interventions = [
 ];
 const state = {
   session: null,
+  incident: null,
+  incidents: [],
   overview: { patients: [], stock: [], staffCount: 0 },
+  sheetSync: null,
   activePage: 'overview',
   selectedPatient: null,
   history: [],
@@ -55,13 +58,19 @@ const state = {
   filterZone: '',
   filterTriage: '',
   chartRequest: 0,
+  requestId: '',
+  presenceTimer: null,
 };
 
 export async function api(path, options = {}) {
   const init = {
     credentials: 'same-origin',
     ...options,
-    headers: { Accept: 'application/json', ...(options.headers || {}) },
+    headers: {
+      Accept: 'application/json',
+      ...(state.incident?.id ? { 'X-Incident-ID': state.incident.id } : {}),
+      ...(options.headers || {}),
+    },
   };
   if (options.body && typeof options.body !== 'string') {
     init.body = JSON.stringify(options.body);
@@ -85,21 +94,27 @@ export async function api(path, options = {}) {
 }
 
 export async function refresh() {
+  const incidentId = state.incident?.id;
+  const accountId = state.session?.id;
+  if (!incidentId || !accountId) return;
   try {
-    state.overview = await api('/api/overview');
+    const overview = await api('/api/overview');
+    if (state.incident?.id !== incidentId || state.session?.id !== accountId)
+      return;
+    state.overview = overview;
+    if (overview.incident) {
+      state.incident = overview.incident;
+      state.incidents = state.incidents.map((item) =>
+        item.id === incidentId ? overview.incident : item,
+      );
+    }
   } catch (error) {
     notify(error.message, 'error');
     return;
   }
+  renderIncidentBar();
   renderCorePage();
-  if (state.activePage === 'stock')
-    renderExtras('stock', {
-      root: $(`#page-${state.activePage}`),
-      state: state.overview,
-      api,
-      refresh,
-      notify,
-    });
+  if (state.activePage === 'stock') renderExtraPage('stock');
 }
 
 function text(value, fallback = '—') {
@@ -176,14 +191,26 @@ function navigate(page) {
     s.hidden = s.dataset.page !== page;
   });
   renderCorePage();
-  if (['stock', 'erg', 'cards'].includes(page))
-    renderExtras(page, {
-      root: $(`#page-${page}`),
-      state: state.overview,
-      api,
-      refresh,
-      notify,
-    });
+  if (['stock', 'erg', 'cards'].includes(page)) renderExtraPage(page);
+}
+function renderExtraPage(page) {
+  const incident = state.incident;
+  renderExtras(page, {
+    root: $(`#page-${page}`),
+    state: state.overview,
+    api: (path, options = {}) =>
+      api(path, {
+        ...options,
+        headers: {
+          ...options.headers,
+          'X-Incident-ID': incident?.id || 'legacy',
+        },
+      }),
+    notify,
+    incidentId: incident?.id || 'legacy',
+    incidentName: incident?.name,
+    incidentClosed: Boolean(incident?.closedAt),
+  });
 }
 
 function renderCorePage() {
@@ -194,6 +221,112 @@ function renderCorePage() {
     zones: renderZones,
   }[state.activePage];
   if (fn) fn($(`#page-${state.activePage}`));
+}
+function renderIncidentBar() {
+  const root = $('#incidentBar');
+  if (!root || !state.session) return;
+  root.replaceChildren();
+  const select = document.createElement('select');
+  select.id = 'incidentSelect';
+  select.setAttribute('aria-label', 'เลือกเหตุการณ์');
+  state.incidents.forEach((incident) =>
+    select.append(
+      new Option(
+        `${incident.name}${incident.closedAt ? ' (ปิดแล้ว)' : ''}`,
+        incident.id,
+      ),
+    ),
+  );
+  const placeholder = new Option('เลือกเหตุการณ์…', '');
+  placeholder.disabled = true;
+  select.prepend(placeholder);
+  select.value = state.incident?.id || '';
+  select.addEventListener('change', () => {
+    const next = state.incidents.find((x) => x.id === select.value);
+    if (next) selectIncident(next);
+  });
+  const create = el('input');
+  create.placeholder = 'ชื่อเหตุการณ์ใหม่';
+  create.setAttribute('aria-label', 'ชื่อเหตุการณ์ใหม่');
+  create.maxLength = 120;
+  create.id = 'incidentName';
+  const add = button('สร้างเหตุการณ์', 'btn-secondary btn-sm', async () => {
+    const name = create.value.trim();
+    if (!name) {
+      create.focus();
+      return;
+    }
+    add.disabled = true;
+    try {
+      const result = await api('/api/incidents', {
+        method: 'POST',
+        body: { name },
+      });
+      await loadIncidents();
+      selectIncident(result.incident);
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      add.disabled = false;
+    }
+  });
+  const close =
+    state.incident && !state.incident.closedAt
+      ? button('ปิดเหตุการณ์', 'btn-danger btn-sm', async () => {
+          const selected = state.incident;
+          if (
+            !window.confirm(
+              `ปิดเหตุการณ์ “${selected.name}” และเก็บไว้ดูย้อนหลังหรือไม่?`,
+            )
+          )
+            return;
+          close.disabled = true;
+          try {
+            const result = await api(
+              `/api/incidents/${encodeURIComponent(selected.id)}`,
+              { method: 'PATCH', body: { closed: true } },
+            );
+            await loadIncidents();
+            if (state.incident?.id === selected.id)
+              selectIncident(result.incident);
+            else renderIncidentBar();
+          } catch (error) {
+            notify(error.message, 'error');
+          } finally {
+            close.disabled = false;
+          }
+        })
+      : null;
+  const current = el('div', 'incident-current');
+  current.append(el('strong', null, 'เหตุการณ์'), select);
+  if (close) current.append(close);
+  const actions = el('div', 'incident-create');
+  actions.append(create, add);
+  root.append(current, actions);
+}
+async function loadIncidents() {
+  const data = await api('/api/incidents');
+  state.incidents = data.incidents || [];
+}
+async function selectIncident(incident, { preserveQr = false } = {}) {
+  const modal = $('#patientDialog');
+  if (modal.open) modal.close();
+  if (!preserveQr && patientIdFromUrl())
+    window.history.replaceState(null, '', location.pathname);
+  state.incident = incident;
+  state.overview = { patients: [], stock: [] };
+  state.filterQuery =
+    state.filterColor =
+    state.filterZone =
+    state.filterTriage =
+      '';
+  sessionStorage.setItem('thaisim-incident', incident.id);
+  renderIncidentBar();
+  if (state.activePage === 'cards') renderExtraPage('cards');
+  else if (state.activePage === 'stock') renderExtraPage('stock');
+  else renderCorePage();
+  await refresh();
+  sendPresence();
 }
 function pageHead(title, subtitle, action) {
   const head = el('div', 'page-head');
@@ -276,7 +409,14 @@ function renderOverview(root) {
   ).length;
   const stats = el('div', 'operation-stats');
   stats.append(
-    el('span', 'badge', `เจ้าหน้าที่ลงชื่อ ${state.overview.staffCount} คน`),
+    Object.assign(
+      el(
+        'span',
+        'badge staff-online',
+        `เจ้าหน้าที่ออนไลน์ ${state.overview.onlineStaffCount || 0} คน`,
+      ),
+      { id: 'onlineCount' },
+    ),
     button(`เวชภัณฑ์ใกล้หมด ${lowStock} รายการ`, 'btn-secondary btn-sm', () =>
       navigate('stock'),
     ),
@@ -299,13 +439,98 @@ function renderOverview(root) {
   );
   const overviewGrid = el('div', 'overview-grid');
   overviewGrid.append(colorPanel, zonePanel);
+  const review = state.overview.triageReview;
+  const reviewPanel = el('section', 'panel triage-review');
+  reviewPanel.append(el('h2', 'panel-head', 'ทบทวนการคัดแยก'));
+  if (review) {
+    renderTriageReview(reviewPanel, review);
+  } else reviewPanel.append(el('p', 'muted', 'ยังไม่มีข้อมูลทบทวนการคัดแยก'));
   const heading = pageHead(
     'ภาพรวมสถานการณ์',
-    `${state.session.name} · ${state.session.org} · ${state.session.opZone}`,
-    button('+ บันทึกเคสใหม่', 'btn-primary', () => openPatient()),
+    `${state.incident?.name || 'เลือกเหตุการณ์'} · ${state.session.name} · ${state.session.org}`,
+    state.incident && !state.incident.closedAt
+      ? button('+ บันทึกเคสใหม่', 'btn-primary', () => openPatient())
+      : null,
   );
   heading.classList.add('overview-heading');
-  root.replaceChildren(heading, grid, overviewGrid, recent);
+  root.replaceChildren(
+    heading,
+    grid,
+    overviewGrid,
+    reviewPanel,
+    recent,
+    renderSheetPanel(),
+  );
+}
+
+function renderSheetPanel() {
+  const panel = el('section', 'panel sheet-dashboard');
+  const content = el('div');
+  const lastSync = state.sheetSync?.lastSyncedAt;
+  content.append(
+    el('h2', null, 'Google Sheets'),
+    el(
+      'p',
+      null,
+      lastSync ? `ซิงก์ล่าสุด ${fmtDate(lastSync)}` : 'รอเปิดการซิงก์ผู้ป่วยและเจ้าหน้าที่',
+    ),
+  );
+  panel.append(content);
+  if (state.sheetSync?.sheetUrl) {
+    const link = el('a', 'btn btn-secondary btn-sm', 'เปิดชีตจัดการข้อมูล');
+    link.href = state.sheetSync.sheetUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    panel.append(link);
+  }
+  return panel;
+}
+
+function renderTriageReview(panel, review) {
+  const coverage =
+    review.coveragePercent == null ? '—' : `${review.coveragePercent}%`;
+  const summary = el('dl', 'triage-review-summary');
+  for (const [label, amount] of [
+    ['คู่ Primary → Secondary', review.matchedCases],
+    ['ความครอบคลุมจาก Primary', coverage],
+    ['Secondary เร่งด่วนขึ้น', review.higherDirection],
+    ['Secondary เร่งด่วนน้อยลง', review.lowerDirection],
+    ['สีเดิม', review.unchanged],
+    ['คู่ที่มีสีดำ', review.blackCases],
+  ]) {
+    const item = el('div');
+    item.append(el('dt', null, label), el('dd', null, String(amount ?? '—')));
+    summary.append(item);
+  }
+  panel.append(summary);
+  panel.append(
+    el(
+      'p',
+      'muted',
+      `มีข้อมูล Primary ${review.primaryCases ?? 0} เคส · ยังไม่มี Secondary ที่จับคู่ได้ ${review.withoutSecondary ?? 0} เคส`,
+    ),
+  );
+  panel.append(
+    el('p', 'muted', 'ใช้ความต่างของสีเป็นจุดตั้งต้นให้ทีมทบทวนเหตุผลหลังการฝึกซ้อม'),
+  );
+  if (!review.changes?.length) return;
+  const changes = el('details', 'triage-changes');
+  changes.append(
+    el('summary', null, `ดูเคสที่สีเปลี่ยน ${review.changes.length} เคส`),
+  );
+  const list = el('ul');
+  for (const change of review.changes) {
+    const item = el('li');
+    item.append(
+      button(change.id, 'btn-secondary btn-sm', () => openPatient(change.id)),
+      badge(change.primary),
+      el('span', null, '→'),
+      badge(change.secondary),
+    );
+    list.append(item);
+  }
+  changes.append(list);
+  panel.append(changes);
 }
 function patientTable(patients) {
   const wrap = el('div', 'table-wrap patient-table');
@@ -444,10 +669,8 @@ function renderPatients(root) {
   const filter = el('div', 'filters');
   filter.append(search, colorSelect, zoneSelect, triageSelect, resultCount);
   const actions = el('div', 'page-actions');
-  actions.append(
-    button('+ เพิ่มผู้ป่วยใหม่', 'btn-primary', () => openPatient()),
-    button('ล้างผู้ป่วยและประวัติ', 'btn-danger mobile-only', clearPatients),
-  );
+  if (!state.incident?.closedAt)
+    actions.append(button('+ เพิ่มผู้ป่วยใหม่', 'btn-primary', () => openPatient()));
   root.replaceChildren(
     pageHead('รายชื่อผู้ป่วย', 'เปิดแฟ้มเพื่อดูประวัติย้อนหลังและบันทึกการเปลี่ยนแปลง', actions),
     el('section', 'panel'),
@@ -503,7 +726,9 @@ function renderZones(root) {
     pageHead(
       'พื้นที่ปฏิบัติงาน & Decon',
       'คลิกพื้นที่เพื่อดูรายชื่อผู้ป่วยในโซนนั้น',
-      button('+ บันทึก / ย้ายโซน', 'btn-primary', () => openPatient()),
+      state.incident?.closedAt
+        ? null
+        : button('+ บันทึก / ย้ายโซน', 'btn-primary', () => openPatient()),
     ),
     grid,
   );
@@ -517,18 +742,49 @@ function clearForm() {
     i.checked = false;
   });
   showError($('#patientError'), '');
+  renderStockUsage();
+}
+function renderStockUsage() {
+  const root = $('#stockUsagePicker');
+  if (!root) return;
+  root.replaceChildren();
+  $('#stockUsageDetails').open = false;
+  $('#stockUsageDetails').hidden = Boolean(state.incident?.closedAt);
+  (state.overview.stock || []).forEach((item) => {
+    const label = el(
+      'label',
+      null,
+      `${item.name} · เหลือ ${item.qty} ${item.unit || ''}`,
+    );
+    const input = el('input');
+    input.type = 'number';
+    input.min = '0';
+    input.max = String(item.qty);
+    input.step = '1';
+    input.placeholder = '0';
+    input.dataset.stockId = item.id;
+    input.setAttribute('aria-label', `ใช้ ${item.name}`);
+    label.append(input);
+    root.append(label);
+  });
 }
 function openPatient(id = '') {
+  if (!state.incident || (state.incident.closedAt && !id)) return;
   clearForm();
   const chartRequest = ++state.chartRequest;
   state.selectedPatient = null;
   state.history = [];
+  state.requestId =
+    globalThis.crypto?.randomUUID?.() ||
+    `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   $('#dialogTitle').textContent = id ? `แฟ้ม ${id}` : 'บันทึกผู้ป่วย';
   $('#historyPanel').hidden = true;
+  $('#stockHistory').hidden = true;
   $('#patientIdHelp').hidden = Boolean(id);
   $('#patientId').readOnly = Boolean(id);
   $('#patientId').value = id;
   $('#savePatientBtn').disabled = Boolean(id);
+  if (state.incident?.closedAt) $('#savePatientBtn').disabled = true;
   $('#dialogMeta').textContent = id
     ? 'กำลังโหลดข้อมูล…'
     : 'กรอกสี Triage และข้อมูลที่ทราบ';
@@ -542,9 +798,13 @@ async function loadPatient(id, chartRequest) {
     const data = await api(`/api/patients/${encodeURIComponent(id)}`);
     if (!stillOpen()) return;
     if (!data.patient) {
-      $('#dialogTitle').textContent = `ขึ้นทะเบียน ${id}`;
-      $('#dialogMeta').textContent = 'กรอกข้อมูลเพื่อสร้างแฟ้มใหม่สำหรับการ์ดนี้';
-      $('#savePatientBtn').disabled = false;
+      $('#dialogTitle').textContent = state.incident?.closedAt
+        ? `แฟ้ม ${id}`
+        : `ขึ้นทะเบียน ${id}`;
+      $('#dialogMeta').textContent = state.incident?.closedAt
+        ? 'ไม่มีแฟ้มรหัสนี้ในเหตุการณ์ที่ปิดแล้ว'
+        : 'กรอกข้อมูลเพื่อสร้างแฟ้มใหม่สำหรับการ์ดนี้';
+      $('#savePatientBtn').disabled = Boolean(state.incident?.closedAt);
       return;
     }
     state.selectedPatient = data.patient;
@@ -552,9 +812,14 @@ async function loadPatient(id, chartRequest) {
     state.history = data.history || [];
     $('#historyPanel').hidden = false;
     renderHistory();
+    renderStockHistory(data.stockMovements || []);
     $('#dialogMeta').textContent =
       `แก้ไขล่าสุด ${fmtDate(data.patient.updatedAt)}`;
-    $('#savePatientBtn').disabled = false;
+    $('#savePatientBtn').disabled = Boolean(
+      state.incident?.closedAt || data.patient.deletedAt,
+    );
+    if (data.patient.deletedAt)
+      $('#dialogMeta').textContent = 'แฟ้มนี้ถูกเก็บออกจากรายชื่อผู้ป่วยแล้ว';
   } catch (e) {
     if (!stillOpen()) return;
     $('#dialogMeta').textContent = 'เปิดแฟ้มไม่สำเร็จ';
@@ -608,6 +873,23 @@ function renderHistory() {
     root.append(item);
   });
 }
+function renderStockHistory(movements) {
+  const panel = $('#stockHistory');
+  panel.hidden = !movements.length;
+  const list = panel.querySelector('ul');
+  list.replaceChildren(
+    ...movements.map((movement) => {
+      const supply = state.overview.stock.find(
+        (item) => item.id === movement.stockId,
+      );
+      return el(
+        'li',
+        null,
+        `${supply?.name || movement.stockId} · ${movement.quantity} ${supply?.unit || 'หน่วย'} · ${fmtDate(movement.createdAt)}`,
+      );
+    }),
+  );
+}
 function formBody() {
   const form = $('#patientForm');
   const fd = new FormData(form);
@@ -617,6 +899,13 @@ function formBody() {
   body.interventions = $$('#interventionPicker input:checked').map(
     (i) => i.value,
   );
+  body.stockUsage = $$('#stockUsagePicker input')
+    .map((input) => ({
+      stockId: input.dataset.stockId,
+      quantity: Number(input.value) || 0,
+    }))
+    .filter((movement) => movement.quantity > 0);
+  body.requestId = state.requestId;
   return body;
 }
 async function savePatient(event) {
@@ -641,14 +930,21 @@ async function savePatient(event) {
     );
     state.selectedPatient = result.patient;
     state.history = result.history || [];
+    $$('#stockUsagePicker input').forEach((input) => {
+      input.value = '0';
+    });
     notify('บันทึกข้อมูลผู้ป่วยแล้ว');
     $('#patientDialog').close();
     await refresh();
   } catch (e) {
-    showError(
-      $('#patientError'),
-      e.status === 409 ? 'ข้อมูลถูกแก้ไขโดยเจ้าหน้าที่อื่น กรุณาปิดแล้วโหลดใหม่' : e.message,
-    );
+    const message = /insuff|stock|เวชภัณฑ์/i.test(e.message)
+      ? e.message
+      : e.status === 409
+        ? /stale|version/i.test(e.message)
+          ? 'ข้อมูลถูกแก้ไขโดยเจ้าหน้าที่อื่น กรุณาปิดแล้วโหลดใหม่'
+          : e.message
+        : e.message;
+    showError($('#patientError'), message);
   } finally {
     saveButton.disabled = false;
   }
@@ -667,11 +963,10 @@ async function loadSession() {
 }
 async function login(event) {
   event.preventDefault();
-  const form = $('#loginForm');
-  const body = Object.fromEntries(new FormData(form).entries());
+  const body = Object.fromEntries(new FormData($('#loginForm')).entries());
   const error = $('#loginError');
-  if (!Object.values(body).every(Boolean)) {
-    showError(error, 'กรุณากรอกข้อมูลให้ครบทุกช่อง');
+  if (!body.username?.trim()) {
+    showError(error, 'กรุณากรอกชื่อผู้ใช้');
     return;
   }
   try {
@@ -683,18 +978,100 @@ async function login(event) {
     showError(error, e.message);
   }
 }
-function enterApp() {
+async function register(event) {
+  event.preventDefault();
+  const body = Object.fromEntries(new FormData($('#registerForm')).entries());
+  const error = $('#registerError');
+  if (
+    ![body.name, body.org, body.duty, body.opZone].every((value) =>
+      value?.trim(),
+    )
+  ) {
+    showError(error, 'กรุณากรอกข้อมูลที่มีเครื่องหมาย * ให้ครบ');
+    return;
+  }
+  body.personnelCode = body.personnelCode?.trim() || '000';
+  try {
+    const result = await api('/api/register', { method: 'POST', body });
+    state.session = result.staff;
+    enterApp();
+    notify(`ลงทะเบียนสำเร็จ ชื่อผู้ใช้: ${result.username}`);
+  } catch (e) {
+    showError(error, e.message);
+  }
+}
+function setAuthMode(mode) {
+  const loginMode = mode === 'login';
+  $('#loginForm').hidden = !loginMode;
+  $('#registerForm').hidden = loginMode;
+  $('#loginTab').classList.toggle('active', loginMode);
+  $('#registerTab').classList.toggle('active', !loginMode);
+  $('#loginTab').setAttribute('aria-selected', String(loginMode));
+  $('#registerTab').setAttribute('aria-selected', String(!loginMode));
+}
+async function enterApp() {
   $('#authView').hidden = true;
   $('#mainView').hidden = false;
   $('#sessionLabel').textContent =
     `${state.session.name} · ${state.session.duty}`;
   $('#sideProfile').textContent =
     `${state.session.name} · ${state.session.org}\n${state.session.opZone}`;
+  $('#assignedUsername').textContent =
+    `ชื่อผู้ใช้: ${state.session.username || '—'}`;
+  $('#mobileUsername').textContent = state.session.username || '';
+  $('#copyUsernameBtn').hidden = !state.session.username;
   renderNav();
   navigate('overview');
-  refresh();
-  const id = patientIdFromUrl();
-  if (id) setTimeout(() => openPatient(id), 0);
+  const qrPatientId = patientIdFromUrl();
+  const qrIncidentId = qrPatientId
+    ? new URLSearchParams(location.search).get('incident') || 'legacy'
+    : null;
+  try {
+    await loadIncidents();
+    const pinned = state.incidents.find((item) => item.id === qrIncidentId);
+    const previous = state.incidents.find(
+      (item) => item.id === sessionStorage.getItem('thaisim-incident'),
+    );
+    const incident =
+      pinned ||
+      previous ||
+      state.incidents.find((item) => !item.closedAt) ||
+      state.incidents[0];
+    if (incident) await selectIncident(incident, { preserveQr: true });
+    if (qrPatientId && pinned && state.incident?.id === pinned.id)
+      openPatient(qrPatientId);
+    else if (qrPatientId && !pinned) notify('ไม่พบเหตุการณ์ที่ระบุในการ์ดนี้', 'error');
+    const accountId = state.session?.id;
+    api('/api/sheets/status')
+      .then((payload) => {
+        if (state.session?.id !== accountId) return;
+        state.sheetSync = payload;
+        const panel = $('.sheet-dashboard');
+        if (panel && state.activePage === 'overview')
+          panel.replaceWith(renderSheetPanel());
+      })
+      .catch(() => {});
+    clearInterval(state.presenceTimer);
+    state.presenceTimer = setInterval(sendPresence, 30_000);
+  } catch (error) {
+    notify(error.message, 'error');
+  }
+}
+async function sendPresence() {
+  const incidentId = state.incident?.id;
+  const accountId = state.session?.id;
+  if (!accountId || !incidentId || document.visibilityState !== 'visible')
+    return;
+  try {
+    const data = await api('/api/presence', { method: 'POST', body: {} });
+    if (state.incident?.id !== incidentId || state.session?.id !== accountId)
+      return;
+    state.overview.onlineStaffCount = data.onlineStaffCount;
+    const node = $('#onlineCount');
+    if (node) node.textContent = `เจ้าหน้าที่ออนไลน์ ${data.onlineStaffCount} คน`;
+  } catch {
+    // The next heartbeat updates presence after a temporary connection issue.
+  }
 }
 async function logout() {
   try {
@@ -703,30 +1080,38 @@ async function logout() {
     /* still clear local view */
   }
   state.session = null;
+  state.incident = null;
+  state.overview = { patients: [], stock: [] };
+  state.sheetSync = null;
+  clearInterval(state.presenceTimer);
+  state.presenceTimer = null;
   $('#mainView').hidden = true;
   $('#authView').hidden = false;
   $('#loginForm').reset();
 }
-async function clearPatients() {
-  if (!window.confirm('ยืนยันล้างผู้ป่วยและประวัติทั้งหมด? การกระทำนี้ย้อนกลับไม่ได้')) return;
-  try {
-    await api('/api/patients', { method: 'DELETE' });
-    notify('ล้างข้อมูลผู้ป่วยแล้ว');
-    await refresh();
-  } catch (e) {
-    notify(e.message, 'error');
-  }
-}
-
 document.addEventListener('DOMContentLoaded', () => {
   $('#loginForm').addEventListener('submit', login);
+  $('#registerForm').addEventListener('submit', register);
+  $('#loginTab').addEventListener('click', () => setAuthMode('login'));
+  $('#registerTab').addEventListener('click', () => setAuthMode('register'));
+  $('#copyUsernameBtn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(state.session.username);
+      notify('คัดลอกชื่อผู้ใช้แล้ว');
+    } catch (_) {
+      notify('คัดลอกไม่สำเร็จ', 'error');
+    }
+  });
+  $('#mobileUsername').addEventListener('click', () =>
+    $('#copyUsernameBtn').click(),
+  );
+  document.addEventListener('visibilitychange', sendPresence);
   $('#patientForm').addEventListener('submit', savePatient);
   $('#closeDialogBtn').addEventListener('click', () =>
     $('#patientDialog').close(),
   );
   $('#logoutBtn').addEventListener('click', logout);
   $('#refreshBtn').addEventListener('click', refresh);
-  $('#clearBtn').addEventListener('click', clearPatients);
   $$('.triage-option').forEach((b) =>
     b.addEventListener('click', () => {
       $('#patientColor').value = b.dataset.color;
@@ -748,4 +1133,4 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSession();
 });
 
-export { state, renderPatients, openPatient, clearPatients };
+export { state, renderPatients, openPatient };

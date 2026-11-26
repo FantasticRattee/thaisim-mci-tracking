@@ -48,7 +48,7 @@ function pageHead(title, sub, actions = '') {
   return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div><div class="page-actions">${actions}</div></div>`;
 }
 
-function renderStock(root, state, api, notify) {
+function renderStock(root, state, api, notify, incidentClosed) {
   let stock = state.stock || [];
   let saving = false;
   root.innerHTML =
@@ -80,6 +80,14 @@ function renderStock(root, state, api, notify) {
   };
   drawRows();
   root.querySelector('.stock-search').addEventListener('input', drawRows);
+  if (incidentClosed) {
+    root.querySelector('.stock-reset').hidden = true;
+    root.querySelector('.stock-add').hidden = true;
+    root
+      .querySelector('.stock-controls table')
+      .classList.add('stock-read-only');
+    return;
+  }
   async function save(control, pathname, options, message, form) {
     if (saving) return;
     saving = true;
@@ -139,8 +147,18 @@ function renderStock(root, state, api, notify) {
 
 function renderErg(root) {
   root.innerHTML =
-    pageHead('คู่มือ ERG', 'ดัชนีค้นหาสารเคมีเบื้องต้น — ใช้คู่กับหน่วยงานฉุกเฉินและคู่มือฉบับเต็ม') +
-    `<section class="panel"><div class="filters"><input class="erg-search" type="search" placeholder="ค้นหา UN / ชื่อไทย / ชื่ออังกฤษ" aria-label="ค้นหาสารเคมี"></div><div class="erg-results"></div><div class="resource-links"><strong>แหล่งข้อมูลทางการ:</strong> <a href="${ERG_SOURCES.thai}" target="_blank" rel="noopener">กรมควบคุมมลพิษ / ERG4Thai</a> · <a href="${ERG_SOURCES.phmsa}" target="_blank" rel="noopener">U.S. PHMSA ERG</a> · <a href="${ERG_SOURCES.erg2024}" target="_blank" rel="noopener">ERG2024 PDF</a></div></section><p class="notice">หน้านี้เป็นดัชนีอ้างอิง ไม่ใช่คำแนะนำทางคลินิกหรือคำสั่งปฏิบัติการ โปรดติดต่อผู้เชี่ยวชาญและตรวจคู่มือฉบับปัจจุบัน</p>`;
+    pageHead(
+      'คู่มือสารเคมี',
+      'ค้นเลข UN หรือชื่อสารเคมี และเปิดคู่มือ ERG4Thai ของกรมควบคุมมลพิษ',
+    ) +
+    `<section class="panel">
+      <div class="page-actions" aria-label="ช่องทางเปิด ERG4Thai">
+        <a class="btn btn-primary" href="${ERG_SOURCES.web}" target="_blank" rel="noopener">เปิดเว็บ ERG4Thai</a>
+        <a class="btn btn-secondary" href="${ERG_SOURCES.ios}" target="_blank" rel="noopener">แอป iPhone / iPad</a>
+        <a class="btn btn-secondary" href="${ERG_SOURCES.android}" target="_blank" rel="noopener">แอป Android</a>
+      </div>
+    </section>
+    <section class="panel"><div class="filters"><input class="erg-search" type="search" placeholder="ค้นหา UN / ชื่อไทย / ชื่ออังกฤษ" aria-label="ค้นหาสารเคมี"></div><div class="erg-results"></div><div class="resource-links"><a href="${ERG_SOURCES.thai}" target="_blank" rel="noopener">คู่มือกรมควบคุมมลพิษ</a> · <a href="${ERG_SOURCES.phmsa}" target="_blank" rel="noopener">U.S. PHMSA ERG</a> · <a href="${ERG_SOURCES.erg2024}" target="_blank" rel="noopener">ERG2024 PDF</a></div></section>`;
   const search = root.querySelector('.erg-search'),
     results = root.querySelector('.erg-results');
   const draw = () => {
@@ -158,10 +176,13 @@ function renderErg(root) {
   draw();
 }
 
-function qrCard(code, index) {
-  return `<article class="qr-card"><div class="qr-caption"><strong>${code}</strong><span>ThaiSIM MCI · การ์ดฝึกซ้อม</span></div><img src="/api/qr/${code}.png" alt="QR สำหรับรหัส ${code}" loading="${index < 12 ? 'eager' : 'lazy'}" width="115" height="115"><div class="qr-bands"><span class="badge badge-red">แดง</span><span class="badge badge-yellow">เหลือง</span><span class="badge badge-green">เขียว</span><span class="badge badge-black">ดำ</span></div></article>`;
+export function qrImagePath(code, incidentId = 'legacy') {
+  return `/api/qr/${encodeURIComponent(code)}.png?incident=${encodeURIComponent(incidentId)}`;
 }
-function renderCards(root, notify) {
+function qrCard(code, index, incidentId, incidentName) {
+  return `<article class="qr-card"><div class="qr-caption"><strong>${code}</strong><span>${esc(incidentName || 'ThaiSIM MCI · การ์ดฝึกซ้อม')}</span></div><img src="${qrImagePath(code, incidentId)}" alt="QR สำหรับรหัส ${code}" loading="${index < 12 ? 'eager' : 'lazy'}" width="115" height="115"><div class="qr-bands"><span class="badge badge-red">แดง</span><span class="badge badge-yellow">เหลือง</span><span class="badge badge-green">เขียว</span><span class="badge badge-black">ดำ</span></div></article>`;
+}
+function renderCards(root, notify, incidentId, incidentName) {
   root.innerHTML =
     pageHead(
       'พิมพ์การ์ด QR',
@@ -171,7 +192,7 @@ function renderCards(root, notify) {
     <label class="field"><span>จำนวนบัตร</span><input name="count" type="number" min="1" max="500" value="12" aria-describedby="qr-help" required></label>
     <label class="field"><span>รหัสเริ่มต้น</span><input name="start" type="number" min="1" max="999999" value="1" required></label>
     <div class="page-actions"><button class="btn btn-secondary" type="submit">สร้างตัวอย่าง</button><button class="btn btn-primary qr-print" type="button">พิมพ์</button></div>
-    </form><small id="qr-help">พิมพ์ได้ครั้งละ 1–500 ใบ การ์ดที่มีรหัสเดียวกันจะเปิดแฟ้มเดียวกัน</small></section><section id="print-area" class="qr-grid" aria-label="ตัวอย่างการ์ด QR"></section>`;
+    </form><small id="qr-help">พิมพ์ได้ครั้งละ 1–500 ใบ การ์ดผูกกับเหตุการณ์ที่เลือก</small></section><section id="print-area" class="qr-grid" aria-label="ตัวอย่างการ์ด QR"></section>`;
   const form = root.querySelector('.qr-controls');
   const area = root.querySelector('#print-area');
   let range = '';
@@ -187,7 +208,12 @@ function renderCards(root, notify) {
     if (next === range) return true;
     range = next;
     area.innerHTML = Array.from({ length: count }, (_, i) =>
-      qrCard(`MCI-${String(start + i).padStart(3, '0')}`, i),
+      qrCard(
+        `MCI-${String(start + i).padStart(3, '0')}`,
+        i,
+        incidentId,
+        incidentName,
+      ),
     ).join('');
     return true;
   }
@@ -215,11 +241,15 @@ function renderCards(root, notify) {
   draw();
 }
 
-export function renderExtras(page, { root, state, api, notify }) {
+export function renderExtras(
+  page,
+  { root, state, api, notify, incidentId, incidentName, incidentClosed },
+) {
   if (!root) throw new Error('Extras root is required');
-  if (page === 'stock') renderStock(root, state, api, notify);
+  if (page === 'stock') renderStock(root, state, api, notify, incidentClosed);
   else if (page === 'erg') renderErg(root);
-  else if (page === 'cards') renderCards(root, notify);
+  else if (page === 'cards')
+    renderCards(root, notify, incidentId, incidentName);
   else root.innerHTML = '<p class="empty">ไม่พบหน้าที่เลือก</p>';
   return root;
 }

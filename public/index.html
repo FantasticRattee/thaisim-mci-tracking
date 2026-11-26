@@ -26,18 +26,44 @@
             <h1 id="authTitle">เข้าสู่ระบบเจ้าหน้าที่</h1>
             <p>ระบบฝึกซ้อมติดตามผู้ป่วยสาธารณภัยหมู่</p>
           </header>
+          <div class="auth-tabs" role="tablist" aria-label="การเข้าใช้งาน">
+            <button
+              id="loginTab"
+              class="btn btn-secondary btn-sm active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+            >
+              เข้าสู่ระบบ
+            </button>
+            <button
+              id="registerTab"
+              class="btn btn-secondary btn-sm"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              ลงทะเบียนครั้งแรก
+            </button>
+          </div>
           <form id="loginForm" class="auth-form" novalidate>
-            <label for="passcode"
-              >รหัสเข้าสู่ระบบ <span aria-hidden="true">*</span></label
+            <label for="username"
+              >ชื่อผู้ใช้ <span aria-hidden="true">*</span></label
             >
             <input
-              id="passcode"
-              name="passcode"
-              type="password"
+              id="username"
+              name="username"
               required
-              autocomplete="current-password"
-              placeholder="รหัสจากผู้จัดการการฝึกซ้อม"
+              autocomplete="username"
+              placeholder="เช่น ก้อง-EMS01/001"
             />
+            <p id="loginHint" class="hint">ใช้ชื่อผู้ใช้ที่ได้จากการลงทะเบียน</p>
+            <p id="loginError" class="form-error" role="alert" hidden></p>
+            <button class="btn btn-primary btn-block" type="submit">
+              เข้าสู่ระบบ
+            </button>
+          </form>
+          <form id="registerForm" class="auth-form" novalidate hidden>
             <label for="staffName"
               >ชื่อผู้ปฏิบัติงาน <span aria-hidden="true">*</span></label
             >
@@ -85,9 +111,28 @@
               <option value="Treatment">Treatment</option>
               <option value="Transport Staging">Transport Staging</option>
             </select>
-            <p id="loginError" class="form-error" role="alert" hidden></p>
+            <div class="form-grid compact">
+              <div>
+                <label for="callSign">Call sign</label
+                ><input
+                  id="callSign"
+                  name="callSign"
+                  placeholder="เช่น Alpha-1"
+                />
+              </div>
+              <div>
+                <label for="personnelCode">รหัสบุคลากร</label
+                ><input
+                  id="personnelCode"
+                  name="personnelCode"
+                  value="000"
+                  inputmode="numeric"
+                /><small class="field-help">เว้นว่างเพื่อใช้ 000</small>
+              </div>
+            </div>
+            <p id="registerError" class="form-error" role="alert" hidden></p>
             <button class="btn btn-primary btn-block" type="submit">
-              เข้าสู่ระบบ
+              ลงทะเบียนและเข้าสู่ระบบ
             </button>
           </form>
           <p class="hint">ใช้ชื่อและข้อมูลผู้ป่วยสมมติในการฝึกซ้อม</p>
@@ -126,16 +171,32 @@
             <nav id="sideNav" class="nav-list"></nav>
             <div class="sidebar-footer">
               <div id="sideProfile" class="profile"></div>
+              <div id="assignedUsername" class="profile-assignment"></div>
               <button
-                id="clearBtn"
-                class="btn btn-danger btn-block btn-sm"
+                id="copyUsernameBtn"
+                class="btn btn-secondary btn-block btn-sm"
                 type="button"
+                hidden
               >
-                ล้างผู้ป่วยและประวัติ
+                คัดลอกชื่อผู้ใช้
               </button>
             </div>
           </aside>
           <main id="mainContent" class="main-column" tabindex="-1">
+            <div class="mobile-account">
+              <span>ชื่อผู้ใช้</span>
+              <button
+                id="mobileUsername"
+                class="btn btn-secondary btn-sm"
+                type="button"
+                title="แตะเพื่อคัดลอก"
+              ></button>
+            </div>
+            <section
+              id="incidentBar"
+              class="incident-bar"
+              aria-label="เหตุการณ์"
+            ></section>
             <section
               id="page-overview"
               class="page-section"
@@ -323,6 +384,10 @@
             <legend>หัตถการที่ทำ</legend>
             <div id="interventionPicker" class="chip-list"></div>
           </fieldset>
+          <details id="stockUsageDetails" class="stock-usage">
+            <summary>บันทึกเวชภัณฑ์ที่ใช้รอบนี้</summary>
+            <div id="stockUsagePicker" class="form-grid compact"></div>
+          </details>
           <div>
             <label for="patientNote">บันทึกเพิ่มเติมรอบนี้</label
             ><textarea
@@ -336,6 +401,10 @@
           <div id="historyPanel" class="history-panel" hidden>
             <h3>ประวัติย้อนหลัง</h3>
             <div id="historyList" class="history-list"></div>
+          </div>
+          <div id="stockHistory" class="history-panel" hidden>
+            <h3>เวชภัณฑ์ที่หักจากคลัง</h3>
+            <ul></ul>
           </div>
         </div>
         <div class="dialog-actions">

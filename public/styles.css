@@ -596,3 +596,46 @@ section.panel + .notice { margin-top: 14px; }
   #page-stock .table-wrap :is(th, td) { padding: 8px 5px; }
   .stock-stepper { flex-wrap: wrap; }
 }
+
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 15px 29px 0; }
+.auth-tabs .active { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+.auth-form #loginHint { margin: 0; }
+.profile-assignment { font-size: .82rem; overflow-wrap: anywhere; color: var(--muted); }
+.mobile-account { display: none; }
+.incident-bar {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 18px;
+  max-width: 1450px; margin: 0 auto; padding: 16px clamp(16px, 3.4vw, 47px) 0;
+}
+.incident-current, .incident-create { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.incident-current { flex: 2 1 320px; }
+.incident-create { flex: 1 1 244px; }
+.incident-create .btn, .incident-current .btn { flex: none; }
+.incident-current select, .incident-create input { min-width: 0; }
+.incident-bar + .page-section { padding-top: 17px; }
+.staff-online { background: var(--brand-soft); color: var(--brand); }
+.triage-review-summary {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 12px;
+}
+.triage-review-summary div { padding: 10px 12px; border-radius: 9px; background: var(--bg); border: 1px solid var(--line); }
+.triage-review-summary dt { color: var(--muted); font-size: .82rem; }
+.triage-review-summary dd { font-size: 1.3rem; font-weight: 700; margin: 3px 0 0; }
+.triage-review p { font-size: .87rem; margin-bottom: 4px; }
+.triage-changes { margin-top: 9px; }
+.triage-changes ul { padding: 0; list-style: none; }
+.triage-changes li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.stock-usage { padding: 10px 13px; border: 1px solid var(--line); border-radius: 9px; }
+.stock-usage summary, .triage-changes summary { color: var(--brand); font-weight: 650; cursor: pointer; }
+.stock-usage #stockUsagePicker { margin-top: 11px; }
+.stock-read-only :is(th, td):last-child { display: none; }
+.sheet-dashboard { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sheet-dashboard p { margin: 4px 0 0; font-size: .88rem; }
+@media (max-width: 780px) {
+  .mobile-account { display: flex; align-items: center; gap: 7px; padding: 8px 14px 0; font-size: .82rem; color: var(--muted); min-width: 0; }
+  .mobile-account button { overflow-wrap: anywhere; }
+}
+@media (max-width: 560px) {
+  .auth-tabs { padding-inline: 19px; }
+  .incident-bar { padding-inline: 14px; }
+  .incident-current, .incident-create { flex-basis: 100%; }
+  .triage-review-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
