@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import QRCode from 'qrcode';
+import { patientLink } from '../public/patient-link.js';
 
 const COLORS = new Set(['red', 'yellow', 'green', 'black']);
 const ZONES = new Set([
@@ -417,7 +418,7 @@ export function archivePatient(
 
 export function registerIncidentRoutes(
   app,
-  { db, auth, getOnlineCount, staffLabel, publicOrigin } = {},
+  { db, auth, getOnlineCount, staffLabel, publicOrigin, requireManage } = {},
 ) {
   const guard = auth || ((_req, _res, next) => next());
   app.get('/api/incidents', guard, (_req, res) =>
@@ -571,22 +572,27 @@ export function registerIncidentRoutes(
       sendError(res, e);
     }
   });
-  app.delete('/api/patients/:id', guard, (req, res) => {
-    try {
-      const scope = requireIncident(db, req, true),
-        id = normalizeId(req.params.id);
-      res.json(
-        archivePatient(db, {
-          scope: scope.id,
-          id,
-          version: req.body?.version,
-          actor: staffName(req, staffLabel),
-        }),
-      );
-    } catch (e) {
-      sendError(res, e);
-    }
-  });
+  app.delete(
+    '/api/patients/:id',
+    guard,
+    requireManage || ((_req, _res, next) => next()),
+    (req, res) => {
+      try {
+        const scope = requireIncident(db, req, true),
+          id = normalizeId(req.params.id);
+        res.json(
+          archivePatient(db, {
+            scope: scope.id,
+            id,
+            version: req.body?.version,
+            actor: staffName(req, staffLabel),
+          }),
+        );
+      } catch (e) {
+        sendError(res, e);
+      }
+    },
+  );
   app.get('/api/stock', guard, (req, res) => {
     try {
       const s = requireIncident(db, req);
@@ -701,11 +707,7 @@ export function registerIncidentRoutes(
       const origin = publicOrigin || `${req.protocol}://${req.get('host')}`;
       res
         .type('png')
-        .send(
-          await QRCode.toBuffer(
-            `${origin}/?incident=${encodeURIComponent(s.id)}&id=${id}`,
-          ),
-        );
+        .send(await QRCode.toBuffer(origin + patientLink(id, s.id)));
     } catch (e) {
       sendError(res, e);
     }

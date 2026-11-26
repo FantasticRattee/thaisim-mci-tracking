@@ -4,15 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  createAccount,
-  deleteAccount,
+  canManageData,
   initAccounts,
-  listAccounts,
   registerAccountRoutes,
-  updateAccount,
 } from './accounts.js';
+import { createLiveUpdates } from './live-updates.js';
+import { registerManagementRoutes } from './management.js';
 import * as incidents from './incidents.js';
-import { registerSheetsRoutes } from './sheets-sync.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STOCK = [
@@ -248,6 +246,8 @@ export function createApp(opts = {}) {
     next();
   });
   app.use(express.json({ limit: '100kb' }));
+  const live = createLiveUpdates();
+  app.use('/api', live.observe);
   const { auth, getOnlineCount } = registerAccountRoutes(app, {
     db,
     secret,
@@ -258,6 +258,10 @@ export function createApp(opts = {}) {
     [staff.name, staff.duty, staff.org, staff.opZone]
       .filter(Boolean)
       .join(' · ');
+  const requireManage = (req, res, next) =>
+    canManageData(req.staff)
+      ? next()
+      : res.status(403).json({ error: 'ต้องใช้บัญชีที่มีสิทธิ์จัดการข้อมูล' });
   app.get('/healthz', (req, res) => res.json({ ok: true }));
   incidents.registerIncidentRoutes(app, {
     db,
@@ -265,64 +269,15 @@ export function createApp(opts = {}) {
     getOnlineCount,
     staffLabel,
     publicOrigin,
+    requireManage,
   });
-  const sheetsActor = 'Google Sheets';
-  const sheetPatient = (patient) => ({
-    ...patient,
-    entityId: `${patient.incidentId}:${patient.id}`,
-  });
-  const saveSheetPatient = (row, isEdit) =>
-    sheetPatient(
-      incidents.savePatient(db, {
-        scope: row.incidentId,
-        data: row,
-        actor: sheetsActor,
-        id: typeof row.id === 'string' ? row.id.trim().toUpperCase() : '',
-        version: row.version,
-        isEdit,
-        inTransaction: true,
-      }).patient,
-    );
-  registerSheetsRoutes(app, {
+  app.get('/api/live', auth, live.subscribe);
+  registerManagementRoutes(app, {
     db,
     auth,
-    syncToken: opts.syncToken ?? process.env.SHEETS_SYNC_TOKEN,
-    sheetUrl: process.env.GOOGLE_SHEET_URL,
-    listIncidents: () =>
-      db
-        .prepare(
-          'SELECT id, name, createdAt AS openedAt, closedAt FROM incidents ORDER BY createdAt DESC',
-        )
-        .all(),
-    listPatients: ({ incidentId }) =>
-      db
-        .prepare(
-          `
-      SELECT * FROM patients WHERE deletedAt IS NULL ${incidentId ? 'AND incidentId = ?' : ''}
-      ORDER BY incidentId, length(id), id
-    `,
-        )
-        .all(...(incidentId ? [incidentId] : []))
-        .map((row) =>
-          sheetPatient({
-            ...row,
-            interventions: JSON.parse(row.interventions),
-          }),
-        ),
-    listAccounts: () => listAccounts(db),
-    createPatient: (row) => saveSheetPatient(row, false),
-    updatePatient: (row) => saveSheetPatient(row, true),
-    deletePatient: (row) =>
-      incidents.archivePatient(db, {
-        scope: row.incidentId,
-        id: row.id,
-        version: row.version,
-        actor: sheetsActor,
-        inTransaction: true,
-      }),
-    createAccount: (row) => createAccount(db, row),
-    updateAccount: (row) => updateAccount(db, row.accountId, row, row.version),
-    deleteAccount: (row) => deleteAccount(db, row.accountId, row.version),
+    staffLabel,
+    canManage: canManageData,
+    requireManage,
   });
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use((req, res, next) => {
@@ -330,7 +285,7 @@ export function createApp(opts = {}) {
       return res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
     next();
   });
-  return { app, db };
+  return { app, db, live };
 }
 export function startServer() {
   const { app } = createApp();

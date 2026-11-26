@@ -165,6 +165,9 @@
             >
           </div>
           <div class="topbar-actions">
+            <span id="liveStatus" class="live-status" role="status"
+              >กำลังเชื่อมต่อ</span
+            >
             <span class="badge demo-badge">โหมดฝึกซ้อม</span>
             <span id="sessionLabel" class="profile compact-profile"></span
             ><button
@@ -246,6 +249,12 @@
               id="page-cards"
               class="page-section"
               data-page="cards"
+              hidden
+            ></section>
+            <section
+              id="page-manage"
+              class="page-section"
+              data-page="manage"
               hidden
             ></section>
           </main>

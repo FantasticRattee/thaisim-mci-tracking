@@ -4,6 +4,9 @@ const presenceTimeout = 90_000;
 const sessionDuration = 12 * 60 * 60 * 1000;
 const demoUsername = 'DemoThaiSIM001';
 const oldDemoUsername = 'Demo-ThaiSIM/001';
+export function canManageData(staff) {
+  return staff?.username === demoUsername;
+}
 const accountFields =
   'id, username, name, org, callSign, personnelCode, duty, opZone, version, updatedAt';
 
@@ -282,6 +285,7 @@ export function registerAccountRoutes(
     if (!current) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบ' });
     req.staff = current.staff;
     req.staffSessionId = current.sid;
+    req.sessionExpiresAt = current.expiresAt;
     next();
   }
   function setSession(res, staff) {

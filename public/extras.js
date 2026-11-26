@@ -1,3 +1,4 @@
+import { patientLink } from './patient-link.js';
 import { CHEMICALS, ERG_SOURCES } from './erg-data.js';
 
 const esc = (v) =>
@@ -80,13 +81,17 @@ function renderStock(root, state, api, notify, incidentClosed) {
   };
   drawRows();
   root.querySelector('.stock-search').addEventListener('input', drawRows);
+  const refreshStockRows = (next) => {
+    stock = next;
+    drawRows();
+  };
   if (incidentClosed) {
     root.querySelector('.stock-reset').hidden = true;
     root.querySelector('.stock-add').hidden = true;
     root
       .querySelector('.stock-controls table')
       .classList.add('stock-read-only');
-    return;
+    return refreshStockRows;
   }
   async function save(control, pathname, options, message, form) {
     if (saving) return;
@@ -143,6 +148,7 @@ function renderStock(root, state, api, notify, incidentClosed) {
       'รีเซ็ตคลังแล้ว',
     );
   });
+  return refreshStockRows;
 }
 
 function renderErg(root) {
@@ -180,14 +186,17 @@ export function qrImagePath(code, incidentId = 'legacy') {
   return `/api/qr/${encodeURIComponent(code)}.png?incident=${encodeURIComponent(incidentId)}`;
 }
 function qrCard(code, index, incidentId, incidentName) {
-  return `<article class="qr-card"><div class="qr-caption"><strong>${code}</strong><span>${esc(incidentName || 'ThaiSIM MCI · การ์ดฝึกซ้อม')}</span></div><img src="${qrImagePath(code, incidentId)}" alt="QR สำหรับรหัส ${code}" loading="${index < 12 ? 'eager' : 'lazy'}" width="115" height="115"><div class="qr-bands"><span class="badge badge-red">แดง</span><span class="badge badge-yellow">เหลือง</span><span class="badge badge-green">เขียว</span><span class="badge badge-black">ดำ</span></div></article>`;
+  return `<article class="qr-card">
+    <div class="qr-caption"><strong>${code}</strong><span>${esc(incidentName || 'ThaiSIM MCI · การ์ดฝึกซ้อม')}</span></div>
+    <a class="qr-link" href="${esc(patientLink(code, incidentId))}" aria-label="เปิดแฟ้ม ${code}" title="เปิดแฟ้ม ${code}">
+      <img src="${qrImagePath(code, incidentId)}" alt="QR สำหรับรหัส ${code}" loading="${index < 12 ? 'eager' : 'lazy'}" width="115" height="115">
+    </a>
+    <div class="qr-bands"><span class="badge badge-red">แดง</span><span class="badge badge-yellow">เหลือง</span><span class="badge badge-green">เขียว</span><span class="badge badge-black">ดำ</span></div>
+  </article>`;
 }
 function renderCards(root, notify, incidentId, incidentName) {
   root.innerHTML =
-    pageHead(
-      'พิมพ์การ์ด QR',
-      'เตรียมการ์ดสำหรับแจกตอนฝึกซ้อม สแกนด้วยกล้องมือถือเพื่อเปิดหรือขึ้นทะเบียนแฟ้มตามรหัส',
-    ) +
+    pageHead('พิมพ์การ์ด QR', 'แตะรูป QR หรือสแกนด้วยกล้องเพื่อเปิดแฟ้มผู้ป่วยของเหตุการณ์นี้') +
     `<section class="panel"><form class="qr-controls">
     <label class="field"><span>จำนวนบัตร</span><input name="count" type="number" min="1" max="500" value="12" aria-describedby="qr-help" required></label>
     <label class="field"><span>รหัสเริ่มต้น</span><input name="start" type="number" min="1" max="999999" value="1" required></label>
@@ -246,7 +255,8 @@ export function renderExtras(
   { root, state, api, notify, incidentId, incidentName, incidentClosed },
 ) {
   if (!root) throw new Error('Extras root is required');
-  if (page === 'stock') renderStock(root, state, api, notify, incidentClosed);
+  if (page === 'stock')
+    return renderStock(root, state, api, notify, incidentClosed);
   else if (page === 'erg') renderErg(root);
   else if (page === 'cards')
     renderCards(root, notify, incidentId, incidentName);

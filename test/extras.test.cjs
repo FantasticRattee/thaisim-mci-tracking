@@ -5,6 +5,11 @@ const assert = require('assert');
   assert.strictEqual(extras.normalizeCardCount(0), 12);
   assert.strictEqual(extras.normalizeCardCount(501), 500);
   assert.strictEqual(extras.normalizeStartCode('42'), 42);
+  const links = await import('../public/patient-link.js').catch(() => ({}));
+  assert.strictEqual(
+    links.patientLink?.('MCI-010', 'exercise-a'),
+    '/?incident=exercise-a&id=MCI-010',
+  );
   assert.strictEqual(
     extras.qrImagePath?.('MCI-010', 'exercise-a'),
     '/api/qr/MCI-010.png?incident=exercise-a',

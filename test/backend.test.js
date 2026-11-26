@@ -8,7 +8,7 @@ import { createApp } from '../src/server.js';
 let app, server, base, cookie;
 before(async () => {
   process.env.SESSION_SECRET = 'test-secret';
-  ({ app } = createApp({ dbPath: ':memory:', syncToken: 'spreadsheet-test' }));
+  ({ app } = createApp({ dbPath: ':memory:' }));
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -202,119 +202,4 @@ test('a cleared exercise remains empty when its SQLite database reopens', () => 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
-
-test('Google Sheets creates, updates and archives records in the actual database with scoped IDs', async () => {
-  const excel = (path, body) =>
-    request(
-      `/api/sheets/${path}`,
-      body
-        ? {
-            method: 'POST',
-            ...json(body),
-            headers: {
-              ...json(body).headers,
-              Authorization: 'Bearer spreadsheet-test',
-            },
-          }
-        : { headers: { Authorization: 'Bearer spreadsheet-test' } },
-    );
-  const batch = (requestId, data) =>
-    excel('changes', { requestId, incidentId: 'legacy', ...data });
-  const registered = await batch('account-1', {
-    accounts: [
-      {
-        Action: 'CREATE',
-        incidentId: 'legacy',
-        name: 'ต่อ',
-        org: 'ทีมจำลอง',
-        duty: 'Medic',
-        opZone: 'triage',
-      },
-    ],
-  });
-  assert.equal(registered.res.status, 200);
-  const account = registered.body.applied.accounts[0].record;
-  const created = await batch('patient-1', {
-    patients: [
-      {
-        Action: 'CREATE',
-        incidentId: 'legacy',
-        id: 'MCI-010',
-        color: 'green',
-        zone: 'triage',
-      },
-    ],
-  });
-  assert.equal(created.res.status, 200);
-  const edit = {
-    Action: 'UPDATE',
-    incidentId: 'legacy',
-    id: 'MCI-010',
-    entityId: 'legacy:MCI-010',
-    version: 1,
-    zone: 'treatment',
-  };
-  assert.equal(
-    (
-      await batch('invalid-transaction', {
-        patients: [edit],
-        accounts: [
-          {
-            Action: 'UPDATE',
-            incidentId: 'legacy',
-            accountId: account.id,
-            version: 99,
-            opZone: 'treatment',
-          },
-        ],
-      })
-    ).res.status,
-    409,
-  );
-  assert.equal(
-    (await excel('snapshot')).body.patients.find((row) => row.id === 'MCI-010')
-      .zone,
-    'triage',
-  );
-  assert.equal(
-    (await batch('valid-update', { patients: [edit] })).res.status,
-    200,
-  );
-  assert.equal(
-    (await excel('snapshot')).body.patients.find((row) => row.id === 'MCI-010')
-      .zone,
-    'treatment',
-  );
-  const login = await request('/api/session', {
-    method: 'POST',
-    ...json({ username: account.username }),
-  });
-  assert.equal(login.res.status, 200);
-  assert.equal(
-    (
-      await batch('delete-both', {
-        patients: [{ ...edit, Action: 'DELETE', version: 2 }],
-        accounts: [
-          {
-            Action: 'DELETE',
-            incidentId: 'legacy',
-            accountId: account.id,
-            version: 1,
-          },
-        ],
-      })
-    ).res.status,
-    200,
-  );
-  assert.equal((await request('/api/overview')).res.status, 401);
-  const after = (await excel('snapshot')).body;
-  assert.equal(
-    after.patients.some((row) => row.id === 'MCI-010'),
-    false,
-  );
-  assert.equal(
-    after.accounts.some((row) => row.id === account.id),
-    false,
-  );
 });

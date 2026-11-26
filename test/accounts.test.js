@@ -133,6 +133,54 @@ test('the login note advertises a working demo username', async () => {
   assert.equal(demo.body.staff.name, 'Demo');
 });
 
+test('only the signed-in public demo has full table administration, including the legacy archive route', async () => {
+  assert.equal((await request('/api/manage', { method: 'GET' })).status, 401);
+  const normal = await request('/api/register', {
+    body: { ...profile, name: 'ทีมปฏิบัติการ' },
+  });
+  const demo = await request('/api/session', {
+    body: { username: 'DemoThaiSIM001' },
+  });
+  const normalView = await request('/api/manage', {
+    method: 'GET',
+    cookie: normal.cookie,
+  });
+  assert.equal(normalView.body.canManage, false);
+  assert.deepEqual(normalView.body.accounts, []);
+  assert.equal(
+    (
+      await request('/api/patients/MCI-001', {
+        method: 'DELETE',
+        body: { version: 1 },
+        cookie: normal.cookie,
+      })
+    ).status,
+    403,
+  );
+  const adminView = await request('/api/manage', {
+    method: 'GET',
+    cookie: demo.cookie,
+  });
+  assert.equal(adminView.body.canManage, true);
+  assert.ok(
+    adminView.body.accounts.some((staff) => staff.id === normal.body.staff.id),
+  );
+  assert.ok(
+    adminView.body.incidents.some(
+      (incident) => incident.id === 'legacy' && incident.patientCount === 4,
+    ),
+  );
+  assert.equal(
+    (
+      await request('/api/sheets/snapshot', {
+        method: 'GET',
+        cookie: demo.cookie,
+      })
+    ).status,
+    404,
+  );
+});
+
 test('legacy accounts keep their IDs and original logins after compact-name collisions', async () => {
   const db = new DatabaseSync(':memory:');
   initAccounts(db);
