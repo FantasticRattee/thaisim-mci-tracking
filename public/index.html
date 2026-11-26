@@ -224,6 +224,33 @@
               data-page="patients"
               hidden
             ></section>
+            <section id="page-scan" class="page-section" data-page="scan" data-scanner-state="idle"
+              aria-labelledby="scannerTitle" hidden>
+              <div class="page-head"><div>
+                <h1 id="scannerTitle">สแกน QR Code</h1>
+                <p>หันกล้องไปที่ QR บนบัตรผู้ป่วย เพื่อเปิดแฟ้มของคนนั้น</p>
+              </div></div>
+              <div class="panel scanner-panel">
+                <div class="scanner-preview">
+                  <video id="scannerVideo" muted autoplay playsinline aria-label="ภาพจากกล้องสำหรับสแกนบัตรผู้ป่วย"></video>
+                  <div class="scanner-frame" aria-hidden="true"></div>
+                  <div class="scanner-placeholder" aria-hidden="true">
+                    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true">
+                      <path d="M8 3H4a1 1 0 0 0-1 1v4m13-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m8 0h4a1 1 0 0 0 1-1v-4M7 7h3v3H7zm7 0h3v3h-3zM7 14h3v3H7zm7 0h1v3h2v-1"/>
+                    </svg>
+                  </div>
+                </div>
+                <p id="scannerStatus" class="scanner-status" role="status" aria-live="polite">กดเปิดกล้อง หรือเลือกรูป QR จากเครื่อง</p>
+                <div class="scanner-actions">
+                  <button id="scannerStart" class="btn btn-primary" type="button">เปิดกล้อง</button>
+                  <button id="scannerStop" class="btn btn-secondary" type="button" hidden>ปิดกล้อง</button>
+                  <label class="btn btn-secondary scanner-file-label">เลือกรูป QR
+                    <input id="scannerFile" type="file" accept="image/*" aria-label="เลือกรูป QR">
+                  </label>
+                </div>
+              </div>
+            </section>
             <section
               id="page-zones"
               class="page-section"

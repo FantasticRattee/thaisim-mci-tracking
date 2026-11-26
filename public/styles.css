@@ -533,7 +533,7 @@ section.panel + .notice { margin-top: 14px; }
     inset: auto 0 0;
     z-index: 5;
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     min-height: 57px;
     padding: 5px 5px calc(5px + env(safe-area-inset-bottom));
     border-top: 1px solid #dbe6e4;
@@ -624,6 +624,75 @@ section.panel + .notice { margin-top: 14px; }
   .patient-table th:nth-child(3) { white-space: normal; }
   #page-stock .table-wrap :is(th, td) { padding: 8px 5px; }
   .stock-stepper { flex-wrap: wrap; }
+}
+
+/* QR scanner: keep the camera surface stable while controls remain reachable. */
+.scanner-panel { display: grid; gap: 14px; width: min(100%, 820px); margin-inline: auto; }
+.scanner-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  min-height: 220px;
+  max-height: clamp(220px, 50svh, 530px);
+  overflow: hidden;
+  border: 1px solid #183c3c;
+  border-radius: 14px;
+  background: #102b2c;
+  isolation: isolate;
+}
+.scanner-preview video { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s ease; }
+.scanner-preview::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 40%, #071c1dcc 100%); z-index: 1; }
+.scanner-placeholder { position: absolute; z-index: 2; display: grid; place-items: center; color: #d6ebe4; opacity: .9; }
+.scanner-frame { position: absolute; z-index: 3; width: min(62%, 330px, 44svh); aspect-ratio: 1; border: 2px solid #b9f0d0; border-radius: 16px; box-shadow: 0 0 0 999px #061c1c3d, 0 0 20px #c2f7d055; opacity: 0; pointer-events: none; }
+.scanner-status { min-height: 1.55em; margin: 0; text-align: center; font-size: .88rem; color: var(--muted); }
+.scanner-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.scanner-actions .btn { min-width: 112px; min-height: 44px; }
+.scanner-file-label { position: relative; overflow: hidden; cursor: pointer; }
+.scanner-file-label input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.scanner-file-label:focus-within { outline: 3px solid #228f83; outline-offset: 3px; }
+#page-scan[data-scanner-state="requesting"] .scanner-frame,
+#page-scan[data-scanner-state="scanning"] .scanner-frame,
+#page-scan[data-scanner-state="image"] .scanner-frame { opacity: 1; }
+#page-scan[data-scanner-state="requesting"] .scanner-preview video,
+#page-scan[data-scanner-state="scanning"] .scanner-preview video { opacity: 1; }
+#page-scan[data-scanner-state="scanning"] .scanner-placeholder,
+#page-scan[data-scanner-state="image"] .scanner-placeholder { opacity: 0; }
+#page-scan[data-scanner-state="error"] .scanner-preview { border-color: #a5525f; }
+.scan-nav-icon { width: 20px; height: 20px; color: currentColor; }
+.sidebar .scan-nav-icon { margin-inline-end: 2px; }
+
+@media (max-width: 900px) {
+  .scanner-panel { width: 100%; }
+  .scanner-preview { aspect-ratio: 16 / 11; min-height: 190px; }
+  .mobile-nav button { display: grid; place-items: center; align-content: center; gap: 1px; min-height: 44px; font-size: .61rem; }
+  .mobile-nav .scan-nav-icon { width: 18px; height: 18px; }
+}
+@media (max-width: 560px) {
+  .scanner-preview { aspect-ratio: 4 / 3; min-height: 180px; border-radius: 11px; }
+  .scanner-frame { width: min(70%, 270px); border-radius: 12px; }
+  .scanner-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scanner-actions .btn { width: 100%; min-width: 0; }
+  .scanner-file-label { grid-column: auto; }
+  .mobile-nav { padding-inline: max(3px, env(safe-area-inset-left)) max(3px, env(safe-area-inset-right)); }
+  .mobile-nav button { padding-inline: 1px; font-size: .56rem; }
+  .mobile-nav .scan-nav-icon { width: 17px; height: 17px; }
+}
+@media (max-width: 370px) {
+  .mobile-nav { display: flex; justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; }
+  .mobile-nav button { flex: 0 0 44px; min-width: 44px; font-size: .55rem; }
+  .mobile-nav .scan-nav-icon { width: 16px; height: 16px; }
+}
+@media (max-height: 600px) and (orientation: landscape) {
+  #mainView > .app-shell { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .scanner-preview { aspect-ratio: 16 / 8; min-height: 150px; }
+  .scanner-frame { width: min(32vw, 210px); }
+  .scanner-actions { gap: 6px; }
+  .scanner-actions .btn { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scanner-preview video { transition: none; }
 }
 
 .auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 15px 29px 0; }
@@ -742,7 +811,7 @@ section.panel + .notice { margin-top: 14px; }
   .patient-dialog .dialog-head, .patient-dialog .dialog-actions { padding-block: 8px; }
   .patient-dialog .dialog-body { padding-block: 11px; }
   .mobile-nav { min-height: 51px; }
-  .mobile-nav button { min-height: 40px; }
+  .mobile-nav button { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -279,6 +279,10 @@ export function createApp(opts = {}) {
     canManage: canManageData,
     requireManage,
   });
+  // Serve the bundled decoder locally so camera frames never leave the browser.
+  app.get('/vendor/jsQR.js', (_req, res) => res.sendFile(fileURLToPath(import.meta.resolve('jsqr'))));
+  app.get('/vendor/jsQR.LICENSE.txt', (_req, res) =>
+    res.type('text/plain').sendFile(fileURLToPath(import.meta.resolve('jsqr/LICENSE'))));
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use((req, res, next) => {
     if (req.method === 'GET' && !req.path.startsWith('/api/'))

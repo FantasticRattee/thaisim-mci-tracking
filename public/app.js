@@ -1,6 +1,8 @@
 import { mountManagement } from './manage.js';
 import { sexLabels, ageInYears } from './patient-demographics.js';
 import { observeUpdates } from './live.js';
+import { scannedPatientLink } from './patient-link.js';
+import { mountScanner } from './scanner.js';
 import { renderExtras, updateBatchCardStatuses, updateNextPatientCard } from './extras.js';
 
 const $ = (s, root = document) => root.querySelector(s);
@@ -8,6 +10,7 @@ const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const labels = {
   overview: 'ภาพรวมสถานการณ์',
   patients: 'รายชื่อผู้ป่วย',
+  scan: 'สแกน QR Code',
   zones: 'พื้นที่ปฏิบัติงาน & Decon',
   stock: 'คลังเวชภัณฑ์',
   erg: 'คู่มือ ERG4Thai',
@@ -17,6 +20,7 @@ const labels = {
 const mobileLabels = {
   overview: 'ภาพรวม',
   patients: 'ผู้ป่วย',
+  scan: 'สแกน',
   zones: 'พื้นที่',
   stock: 'เวชภัณฑ์',
   erg: 'สารเคมี',
@@ -56,6 +60,7 @@ const state = {
   overview: { patients: [], stock: [], staffCount: 0 },
   live: null,
   management: null,
+  scanner: null,
   demoUsername: null,
   redrawPatients: null,
   redrawStock: null,
@@ -285,12 +290,18 @@ function renderNav() {
         mobile ? mobileLabels[page] : label,
       );
       b.type = 'button';
+      if (page === 'scan') {
+        const icon = $('.scanner-placeholder svg').cloneNode(true);
+        icon.classList.add('scan-nav-icon');
+        b.prepend(icon);
+      }
       if (active) b.setAttribute('aria-current', 'page');
       b.addEventListener('click', () => {
         if (!isCardsPage(page) && cardModeFromUrl()) {
           window.history.replaceState(null, '', location.pathname);
         }
         navigate(page);
+        if (page === 'scan') void state.scanner.start();
       });
       if (mobile) b.setAttribute('aria-label', label);
       return b;
@@ -300,6 +311,11 @@ function renderNav() {
 }
 function navigate(page, { refreshBoard = true } = {}) {
   const leavingIntake = isCardsPage(state.activePage) && !isCardsPage(page);
+  if (state.activePage === 'scan' && page !== 'scan') {
+    state.scanner.stop();
+    if (location.hash === '#scan') window.history.replaceState(null, '', location.pathname);
+  }
+  if (page === 'scan') window.history.replaceState(null, '', location.pathname + '#scan');
   if (page !== 'manage') unmountManagement();
   if (isCardsPage(page) && state.incident) {
     window.history.replaceState(
@@ -314,7 +330,7 @@ function navigate(page, { refreshBoard = true } = {}) {
   $$('.page-section').forEach((s) => {
     s.hidden = s.dataset.page !== page;
   });
-  if (!state.incident && page !== 'erg') {
+  if (!state.incident && page !== 'erg' && page !== 'scan') {
     const message = qrIncidentFromUrl()
       ? 'ไม่พบเหตุการณ์ของ QR นี้ อาจถูกลบไปแล้ว'
       : 'ยังไม่มีเหตุการณ์ให้เลือก สร้างเหตุการณ์ใหม่เพื่อเริ่มฝึกซ้อม';
@@ -1335,7 +1351,7 @@ async function enterApp() {
   renderNav();
   const qrPatientId = patientIdFromUrl();
   const intakePage = !qrPatientId && cardModeFromUrl();
-  navigate(intakePage || 'overview');
+  navigate(intakePage || (!qrPatientId && location.hash === '#scan' ? 'scan' : 'overview'));
   const qrIncidentId = qrIncidentFromUrl();
   try {
     await loadIncidents();
@@ -1381,6 +1397,7 @@ async function logout() {
   leaveApp();
 }
 function leaveApp() {
+  state.scanner.stop();
   if ($('#patientDialog').open) $('#patientDialog').close();
   state.session = null;
   state.incident = null;
@@ -1450,6 +1467,14 @@ function startLiveUpdates() {
   });
 }
 document.addEventListener('DOMContentLoaded', () => {
+  state.scanner = mountScanner($('#page-scan'), {
+    onScan(value) {
+      const link = scannedPatientLink(value, location.origin);
+      if (!link) return false;
+      window.location.assign(link);
+      return true;
+    },
+  });
   $('#loginForm').addEventListener('submit', login);
   $('#registerForm').addEventListener('submit', register);
   $('#loginTab').addEventListener('click', () => setAuthMode('login'));
