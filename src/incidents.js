@@ -186,6 +186,22 @@ function firstUnusedId(db, scope, candidate) {
   }
   return candidate;
 }
+function cardStatuses(db, scope, { start = '1', count = '12' }) {
+  // Even an all-numeric QR at the encoder's default correction level holds at most 5596 digits.
+  if (typeof start !== 'string' || start.length > 5596 || !/^[1-9][0-9]*$/.test(start))
+    throw new Error('กรุณาระบุเลขเริ่มต้นเป็นจำนวนเต็มบวก');
+  if (typeof count !== 'string' || !/^[1-9][0-9]{0,2}$/.test(count) || Number(count) > 500)
+    throw new Error('กรุณาระบุจำนวนบัตรตั้งแต่ 1 ถึง 500');
+
+  const first = BigInt(start);
+  const codes = Array.from({ length: Number(count) }, (_, index) =>
+    'MCI-' + (first + BigInt(index)).toString().padStart(3, '0'));
+  const placeholders = codes.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT id, deletedAt FROM patients WHERE incidentId=? AND id IN (${placeholders})`,
+  ).all(scope, ...codes);
+  return Object.fromEntries(rows.map(({ id, deletedAt }) => [id, deletedAt ? 'archived' : 'registered']));
+}
 function ageInYears(value) {
   const raw = typeof value === 'string' ? value.trim() : value;
   if (raw == null || raw === '') return null;
@@ -508,6 +524,8 @@ export function registerIncidentRoutes(
       const scope = requireIncident(db, req);
       const intake = { incident: scope, nextPatientId: scope.closedAt ? null : scope.nextPatientId };
       if (req.query.view === 'intake') return res.json(intake);
+      if (req.query.view === 'cards-v2')
+        return res.json({ ...intake, cardStatuses: cardStatuses(db, scope.id, req.query) });
       const patients = db
         .prepare(
           'SELECT * FROM patients WHERE incidentId=? AND deletedAt IS NULL ORDER BY length(id),id',
@@ -738,12 +756,12 @@ export function registerIncidentRoutes(
         patient = patientRow(db, id, s.id);
       if (!idOk(id))
         throw Object.assign(new Error('invalid patient id'), { status: 404 });
-      if (patient?.deletedAt)
+      if (patient?.deletedAt && req.query.view !== 'cards-v2')
         throw Object.assign(new Error('patient archived'), { status: 410 });
       const origin = publicOrigin || `${req.protocol}://${req.get('host')}`;
       res
         .type('png')
-        .send(await QRCode.toBuffer(origin + patientLink(id, s.id)));
+        .send(await QRCode.toBuffer(origin + patientLink(id, s.id, req.query.view)));
     } catch (e) {
       sendError(res, e);
     }

@@ -1,7 +1,7 @@
 import { mountManagement } from './manage.js';
 import { sexLabels, ageInYears } from './patient-demographics.js';
 import { observeUpdates } from './live.js';
-import { renderExtras, updateNextPatientCard } from './extras.js';
+import { renderExtras, updateBatchCardStatuses, updateNextPatientCard } from './extras.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -11,7 +11,7 @@ const labels = {
   zones: 'พื้นที่ปฏิบัติงาน & Decon',
   stock: 'คลังเวชภัณฑ์',
   erg: 'คู่มือ ERG4Thai',
-  cards: 'QR ผู้ป่วย',
+  'cards-v2': 'QR ผู้ป่วย',
   manage: 'จัดการข้อมูล',
 };
 const mobileLabels = {
@@ -20,7 +20,7 @@ const mobileLabels = {
   zones: 'พื้นที่',
   stock: 'เวชภัณฑ์',
   erg: 'สารเคมี',
-  cards: 'การ์ด QR',
+  'cards-v2': 'การ์ด QR',
   manage: 'จัดการ',
 };
 const zoneLabels = {
@@ -62,6 +62,7 @@ const state = {
   overviewRequest: 0,
   incidentListRequest: 0,
   activePage: 'overview',
+  cardRange: { start: '1', count: 12 },
   selectedPatient: null,
   chartFromQr: false,
   patientReadOnly: false,
@@ -112,9 +113,14 @@ export async function refresh({ live = false, incidentsChanged = false } = {}) {
   if (!incidentId || !accountId) return;
   const request = ++state.overviewRequest;
   const wasClosed = Boolean(state.incident.closedAt);
-  const intakeOnly = state.activePage === 'cards' && !$('#patientDialog').open;
+  const intakeOnly = isCardsPage(state.activePage) && !$('#patientDialog').open;
+  const query = intakeOnly
+    ? new URLSearchParams(state.activePage === 'cards-v2'
+      ? { view: 'cards-v2', ...state.cardRange }
+      : { view: 'intake' })
+    : null;
   try {
-    const overview = await api(intakeOnly ? '/api/overview?view=intake' : '/api/overview');
+    const overview = await api(query ? '/api/overview?' + query : '/api/overview');
     if (
       request !== state.overviewRequest ||
       state.incident?.id !== incidentId ||
@@ -156,6 +162,9 @@ export async function refresh({ live = false, incidentsChanged = false } = {}) {
       incidentName: state.incident.name,
       incidentClosed: Boolean(state.incident.closedAt),
     });
+  } else if (state.activePage === 'cards-v2') {
+    if (closedChanged) renderExtraPage('cards-v2');
+    updateBatchCardStatuses($('#page-cards-v2'), state.overview.cardStatuses);
   } else if (state.activePage === 'stock') {
     renderExtraPage('stock');
   } else {
@@ -227,13 +236,29 @@ function badge(color) {
     colorLabels[color] || text(color),
   );
 }
+function isCardsPage(page) {
+  return page === 'cards' || page === 'cards-v2';
+}
+function cardModeFromUrl() {
+  const page = location.hash.slice(1);
+  return isCardsPage(page) ? page : null;
+}
+function lastCardRange(incidentId) {
+  try {
+    const range = JSON.parse(sessionStorage.getItem('thaisim-qr-range-' + incidentId));
+    if (range && typeof range.start === 'string' && /^[1-9][0-9]*$/.test(range.start) &&
+        Number.isInteger(range.count) && range.count >= 1 && range.count <= 500)
+      return { start: range.start, count: range.count };
+  } catch { /* Use the initial batch when a stored range is unavailable. */ }
+  return { start: '1', count: 12 };
+}
 function patientIdFromUrl() {
   return new URLSearchParams(location.search).get('id') || '';
 }
 function qrIncidentFromUrl() {
   const params = new URLSearchParams(location.search);
   if (params.get('id')) return params.get('incident') || 'legacy';
-  return location.hash === '#cards' ? params.get('incident') : null;
+  return cardModeFromUrl() ? params.get('incident') : null;
 }
 function notify(message, type = 'success') {
   const toast = $('#toast');
@@ -253,15 +278,16 @@ function showError(target, message) {
 function renderNav() {
   const make = (mobile = false) =>
     Object.entries(labels).map(([page, label]) => {
+      const active = state.activePage === page || (page === 'cards-v2' && isCardsPage(state.activePage));
       const b = el(
         'button',
-        `nav-item ${state.activePage === page ? 'active' : ''}`,
+        `nav-item ${active ? 'active' : ''}`,
         mobile ? mobileLabels[page] : label,
       );
       b.type = 'button';
-      if (state.activePage === page) b.setAttribute('aria-current', 'page');
+      if (active) b.setAttribute('aria-current', 'page');
       b.addEventListener('click', () => {
-        if (page !== 'cards' && location.hash === '#cards') {
+        if (!isCardsPage(page) && cardModeFromUrl()) {
           window.history.replaceState(null, '', location.pathname);
         }
         navigate(page);
@@ -272,14 +298,14 @@ function renderNav() {
   $('#sideNav').replaceChildren(...make());
   $('#mobileNav').replaceChildren(...make(true));
 }
-function navigate(page) {
-  const leavingIntake = state.activePage === 'cards' && page !== 'cards';
+function navigate(page, { refreshBoard = true } = {}) {
+  const leavingIntake = isCardsPage(state.activePage) && !isCardsPage(page);
   if (page !== 'manage') unmountManagement();
-  if (page === 'cards' && state.incident) {
+  if (isCardsPage(page) && state.incident) {
     window.history.replaceState(
       null,
       '',
-      `?incident=${encodeURIComponent(state.incident.id)}#cards`,
+      `?incident=${encodeURIComponent(state.incident.id)}#${page}`,
     );
   }
   state.activePage = page;
@@ -298,14 +324,24 @@ function navigate(page) {
     return;
   }
   renderCorePage();
-  if (['stock', 'erg', 'cards'].includes(page)) renderExtraPage(page);
-  if (leavingIntake) void refresh();
+  if (['stock', 'erg'].includes(page) || isCardsPage(page)) renderExtraPage(page);
+  if (leavingIntake || (page === 'cards-v2' && refreshBoard)) void refresh();
 }
 function renderExtraPage(page) {
   const incident = state.incident;
   const result = renderExtras(page, {
     root: $(`#page-${page}`),
     state: state.overview,
+    cardRange: state.cardRange,
+    onCardsViewChange: navigate,
+    onCardRangeChange: (range) => {
+      if (state.incident?.id !== incident?.id ||
+          (state.cardRange.start === range.start && state.cardRange.count === range.count)) return;
+      state.cardRange = range;
+      try { sessionStorage.setItem('thaisim-qr-range-' + incident.id, JSON.stringify(range)); }
+      catch { /* The range still works in this page. */ }
+      void refresh();
+    },
     api: (path, options = {}) =>
       api(path, {
         ...options,
@@ -489,14 +525,15 @@ async function selectIncident(incident, { preserveQr = false } = {}) {
   ++state.chartRequest;
   state.selectedPatient = null;
   state.history = [];
-  if (!preserveQr && (patientIdFromUrl() || location.hash === '#cards')) {
+  if (!preserveQr && (patientIdFromUrl() || cardModeFromUrl())) {
     const url =
-      state.activePage === 'cards' && incident
-        ? `?incident=${encodeURIComponent(incident.id)}#cards`
+      isCardsPage(state.activePage) && incident
+        ? `?incident=${encodeURIComponent(incident.id)}#${state.activePage}`
         : location.pathname;
     window.history.replaceState(null, '', url);
   }
   state.incident = incident;
+  state.cardRange = lastCardRange(incident?.id);
   state.overview = { patients: [], stock: [] };
   state.filterQuery =
     state.filterColor =
@@ -512,7 +549,7 @@ async function selectIncident(incident, { preserveQr = false } = {}) {
     navigate(state.activePage);
     return;
   }
-  if (state.activePage === 'cards') renderExtraPage('cards');
+  if (isCardsPage(state.activePage)) renderExtraPage(state.activePage);
   else if (state.activePage === 'stock') renderExtraPage('stock');
   else renderCorePage();
   await refresh();
@@ -1195,7 +1232,7 @@ async function savePatient(event) {
     $('#patientDialog').close();
     if (fromQr && !isEdit) {
       state.overview.nextPatientId = result.nextPatientId;
-      navigate('cards');
+      navigate(cardModeFromUrl() || 'cards', { refreshBoard: false });
     } else if (fromQr) {
       openPatient(result.patient.id, { fromQr: true });
     }
@@ -1297,8 +1334,8 @@ async function enterApp() {
   $('#copyUsernameBtn').hidden = !state.session.username;
   renderNav();
   const qrPatientId = patientIdFromUrl();
-  const intakePage = !qrPatientId && location.hash === '#cards';
-  navigate(intakePage ? 'cards' : 'overview');
+  const intakePage = !qrPatientId && cardModeFromUrl();
+  navigate(intakePage || 'overview');
   const qrIncidentId = qrIncidentFromUrl();
   try {
     await loadIncidents();
@@ -1309,10 +1346,9 @@ async function enterApp() {
     const incident = qrIncidentId
       ? pinned
       : previous || state.incidents.find((item) => !item.closedAt) || state.incidents[0];
-    await selectIncident(incident || null, { preserveQr: true });
+    await selectIncident(incident || null, { preserveQr: !intakePage || !incident });
     if (qrPatientId && pinned && state.incident?.id === pinned.id)
       openPatient(qrPatientId, { fromQr: true });
-    else if (intakePage) navigate('cards');
     startLiveUpdates();
     clearInterval(state.presenceTimer);
     state.presenceTimer = setInterval(sendPresence, 30_000);

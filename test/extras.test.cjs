@@ -12,6 +12,12 @@ const assert = require('assert');
     '/api/qr/MCI-010.png?incident=exercise-a',
   );
   assert.strictEqual(
+    extras.qrImagePath?.('MCI-010', 'exercise-a', 'cards-v2'),
+    '/api/qr/MCI-010.png?incident=exercise-a&view=cards-v2',
+  );
+  assert.strictEqual(typeof extras.renderExtras, 'function');
+  assert.strictEqual(typeof extras.updateBatchCardStatuses, 'function');
+  assert.strictEqual(
     ERG_SOURCES.ios,
     'https://apps.apple.com/th/app/erg4thai/id1514892942',
   );

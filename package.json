@@ -1,6 +1,6 @@
 {
-  "name": "thaisim-mci-tracking",
-  "version": "1.0.0",
+  "name": "thaisim",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "Thai-language mass casualty exercise tracking demo",

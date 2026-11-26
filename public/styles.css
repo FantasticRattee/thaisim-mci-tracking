@@ -397,6 +397,26 @@ button.zone-card:hover { border-color: #79a9a1; background: #f8fcfa; }
 .next-patient-empty { margin: 0; padding: 12px 14px; border-radius: 9px; color: #6c520c; background: #fff8de; border: 1px solid #eadca5; }
 .stock-controls .btn { min-width: 35px; }
 .resource-links { margin-bottom: 16px; }
+.qr-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.qr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 12px; margin-top: 16px; }
+.qr-card { display: grid; justify-items: center; align-content: start; gap: 5px; min-width: 0; padding: 14px 12px 10px; border: 1px solid #a9c1bd; border-radius: 10px; text-align: center; background: #fff; color: #1c3334; }
+.qr-caption { display: grid; justify-items: center; gap: 3px; min-width: 0; width: 100%; font-size: .73rem; color: var(--muted); }
+.qr-caption strong { max-width: 100%; color: var(--text); font-size: 1.16rem; line-height: 1.2; overflow-wrap: anywhere; }
+.qr-caption span { max-width: 100%; overflow-wrap: anywhere; }
+.qr-link { display: inline-flex; border-radius: 4px; }
+.qr-link:hover, .qr-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.qr-card img { width: 132px; height: 132px; object-fit: contain; image-rendering: pixelated; }
+.qr-bands { display: flex; gap: 3px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.qr-bands > span { border: 1px solid var(--line); padding: 2px 5px; border-radius: 4px; font-size: .72rem; }
+.cards-view-toggle { display: flex; gap: 7px; margin: -10px 0 16px; }
+.cards-view-toggle .active, .cards-view-toggle [aria-pressed="true"] { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+.qr-controls-v2 { align-items: flex-end; }
+.qr-controls-v2 > label { max-width: 220px; }
+.qr-grid-v2 { margin-top: 16px; }
+.qr-card-v2 { position: relative; min-width: 0; }
+.qr-card-v2 .qr-link::after { content: ""; position: absolute; inset: 0; border-radius: 10px; }
+.qr-card-v2:has(.qr-link:hover), .qr-card-v2:has(.qr-link:focus-visible) { border-color: var(--brand); }
+.qr-card-status { display: inline-flex; min-height: 1.35em; align-items: center; margin-top: 2px; padding: 2px 6px; border-radius: 999px; color: #315d4a; background: #e5f4e9; font-size: .7rem; font-weight: 700; }
 
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 198px minmax(0, 1fr); }
@@ -541,6 +561,12 @@ section.panel + .notice { margin-top: 14px; }
   .next-patient-purpose { width: 100%; text-align: center; }
   .print-current-qr { justify-self: center; }
   .next-patient-card .panel-head { flex-direction: column; gap: 7px; }
+  .cards-view-toggle { margin-top: -4px; }
+  .qr-controls-v2 > label { max-width: none; width: 100%; }
+  .qr-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .qr-card { padding: 10px 5px 8px; }
+  .qr-card img { width: 125px; height: 125px; max-width: 100%; }
+  .qr-caption strong { font-size: 1rem; }
 }
 @media print {
   @page { size: A4; margin: 8mm; }
@@ -561,6 +587,14 @@ section.panel + .notice { margin-top: 14px; }
   .printed-patient-qr canvas { width: 48mm; height: 48mm; image-rendering: pixelated; }
   .printed-patient-qr strong { font-size: 16pt; }
   .printed-patient-qr figcaption { font-size: 10pt; }
+  .qr-card-status { display: none !important; }
+  #page-cards-v2 { padding: 0; }
+  #page-cards-v2 > .page-head, #page-cards-v2 > .cards-view-toggle, #page-cards-v2 > .cards-v2-controls,
+  .cards-v2-controls, .cards-view-toggle { display: none !important; }
+  #print-area-v2, #print-area-v2 * { visibility: visible; }
+  #print-area-v2 { position: static; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3mm; margin: 0; }
+  .qr-card-v2 { break-inside: avoid; box-shadow: none; min-height: 42mm; padding: 2mm; }
+  .qr-card-v2 img { width: 26mm; height: 26mm; }
 }
 
 .operation-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }

@@ -1,7 +1,9 @@
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import QRCode from 'qrcode';
 import { DatabaseSync } from 'node:sqlite';
+import { patientLink } from '../public/patient-link.js';
 import {
   initIncidents,
   registerIncidentRoutes,
@@ -104,6 +106,81 @@ test('a fresh incident registers 10,000 consecutive patients on demand', async (
     db.prepare('SELECT count(*) AS n FROM patients WHERE incidentId=?').get(incident.id).n,
     10_000,
   );
+});
+
+test('V2 printed and clickable QR links stay scoped when patients register out of order', async () => {
+  const newIncident = async (name) => {
+    const res = await fetch(base + '/api/incidents', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    return (await res.json()).incident.id;
+  };
+  const first = await newIncident('first');
+  const second = await newIncident('second');
+  const read = async (scope, code) =>
+    (await fetch(base + '/api/patients/' + code, { headers: { 'x-incident-id': scope } })).json();
+  const save = async (scope, code, cc) => {
+    const res = await fetch(base + '/api/patients', {
+      method: 'POST', headers: { 'x-incident-id': scope, 'content-type': 'application/json' },
+      body: JSON.stringify({ id: code, color: 'green', cc }),
+    });
+    assert.equal(res.status, 201);
+    return (await res.json()).nextPatientId;
+  };
+  for (const [scope, code, view] of [
+    [first, 'MCI-001', 'cards-v2'], [first, 'MCI-002', 'cards-v2'],
+    [second, 'MCI-001', 'cards-v2'], [second, 'MCI-002', 'cards-v2'], [first, 'MCI-001', ''],
+  ]) {
+    const expected = '/?incident=' + scope + '&id=' + code + (view ? '#cards-v2' : '');
+    assert.equal(patientLink(code, scope, view), expected);
+    const qr = await fetch(base + '/api/qr/' + code + '.png?incident=' + scope + (view ? '&view=' + view : ''));
+    assert.equal(qr.status, 200);
+    assert.deepEqual(Buffer.from(await qr.arrayBuffer()), await QRCode.toBuffer(base + expected));
+    assert.equal((await read(scope, code)).patient, null);
+  }
+  assert.equal(await save(first, 'MCI-002', 'first two'), 'MCI-001');
+  assert.equal(await save(second, 'MCI-001', 'second one'), 'MCI-002');
+  assert.equal(await save(first, 'MCI-001', 'first one'), 'MCI-003');
+  const chart = await read(first, 'MCI-001');
+  assert.equal(chart.patient.cc, 'first one');
+  assert.equal(chart.history.length, 1);
+  assert.equal((await read(first, 'MCI-002')).patient.cc, 'first two');
+  assert.equal((await read(second, 'MCI-001')).patient.cc, 'second one');
+  assert.equal((await read(second, 'MCI-002')).patient, null);
+  const archive = await fetch(base + '/api/patients/MCI-001', {
+    method: 'DELETE', headers: { 'x-incident-id': first, 'content-type': 'application/json' },
+    body: JSON.stringify({ version: 1 }),
+  });
+  assert.equal(archive.status, 200);
+  const cards = async (scope, query) =>
+    (await fetch(base + '/api/overview?view=cards-v2&' + query, { headers: { 'x-incident-id': scope } })).json();
+  const mixed = await cards(first, 'start=1&count=12');
+  assert.deepEqual(Object.keys(mixed).sort(), ['cardStatuses', 'incident', 'nextPatientId']);
+  assert.deepEqual(mixed.cardStatuses, { 'MCI-001': 'archived', 'MCI-002': 'registered' });
+  assert.equal(mixed.nextPatientId, 'MCI-003');
+  assert.deepEqual((await cards(first, 'start=2&count=1')).cardStatuses, { 'MCI-002': 'registered' });
+  assert.deepEqual((await cards(second, 'start=1&count=12')).cardStatuses, { 'MCI-001': 'registered' });
+  const png = base + '/api/qr/MCI-001.png?incident=' + first;
+  assert.equal((await fetch(png)).status, 410);
+  const archivedV2 = await fetch(png + '&view=cards-v2');
+  assert.equal(archivedV2.status, 200);
+  assert.deepEqual(Buffer.from(await archivedV2.arrayBuffer()), await QRCode.toBuffer(base + patientLink('MCI-001', first, 'cards-v2')));
+  const archived = await read(first, 'MCI-001');
+  assert.equal(archived.patient.cc, 'first one');
+  assert.ok(archived.patient.deletedAt);
+});
+
+test('V2 batch statuses validate ranges and keep large decimal IDs exact', async () => {
+  const cards = (query) => fetch(base + '/api/overview?view=cards-v2&' + query);
+  for (const query of ['start=0', 'start=1e2', 'start=1.5', 'start=-2', 'count=0', 'count=501', 'count=2.5']) {
+    assert.equal((await cards(query)).status, 400, query);
+  }
+  const large = 'MCI-9007199254740993';
+  savePatient(db, { scope: 'legacy', id: large, data: { color: 'green' }, actor: 'test', isEdit: false });
+  assert.deepEqual((await (await cards('start=9007199254740992&count=2')).json()).cardStatuses, {
+    [large]: 'registered',
+  });
+  assert.equal((await cards('start=10&count=500')).status, 200);
 });
 
 test('creates an incident and rejects mutations after it is closed', async () => {

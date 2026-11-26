@@ -162,8 +162,9 @@ function renderErg(root) {
   draw();
 }
 
-export function qrImagePath(code, incidentId = 'legacy') {
-  return `/api/qr/${encodeURIComponent(code)}.png?incident=${encodeURIComponent(incidentId)}`;
+export function qrImagePath(code, incidentId = 'legacy', view) {
+  const suffix = view ? `&view=${encodeURIComponent(view)}` : '';
+  return `/api/qr/${encodeURIComponent(code)}.png?incident=${encodeURIComponent(incidentId)}${suffix}`;
 }
 export function updateNextPatientCard(
   root,
@@ -203,6 +204,26 @@ export function updateNextPatientCard(
   }
   idLabel.textContent = id;
 }
+export function updateBatchCardStatuses(root, cardStatuses = {}) {
+  root?.querySelectorAll?.('[data-card-code]').forEach((card) => {
+    const statusNode = card.querySelector('.qr-card-status');
+    if (!statusNode) return;
+    const status = cardStatuses?.[card.dataset.cardCode];
+    if (status === 'registered') {
+      statusNode.textContent = 'บันทึกข้อมูลแล้ว';
+      statusNode.setAttribute('aria-label', 'การ์ดนี้มีข้อมูลผู้ป่วยแล้ว');
+      statusNode.hidden = false;
+    } else if (status === 'archived') {
+      statusNode.textContent = 'เก็บออกจากรายชื่อแล้ว';
+      statusNode.setAttribute('aria-label', 'การ์ดนี้เป็นแฟ้มที่เก็บออกจากรายชื่อแล้ว');
+      statusNode.hidden = false;
+    } else {
+      statusNode.textContent = '';
+      statusNode.removeAttribute('aria-label');
+      statusNode.hidden = true;
+    }
+  });
+}
 async function printCurrentCard(root, button, notify) {
   const image = root.querySelector('.next-patient-qr');
   const content = root.querySelector('.next-patient-content');
@@ -241,9 +262,18 @@ async function printCurrentCard(root, button, notify) {
   }
 }
 
+function cardsViewToggle(active) {
+  return `<div class="cards-view-toggle" role="group" aria-label="รูปแบบการ์ด QR"><button type="button" class="btn btn-secondary ${active === 'cards-v2' ? 'active' : ''}" data-cards-view="cards-v2" aria-pressed="${active === 'cards-v2'}">หลายใบ (V2)</button><button type="button" class="btn btn-secondary ${active === 'cards' ? 'active' : ''}" data-cards-view="cards" aria-pressed="${active === 'cards'}">ทีละใบ</button></div>`;
+}
+function bindCardsViewToggle(root, onChange) {
+  root.querySelectorAll('[data-cards-view]').forEach((button) => {
+    button.addEventListener('click', () => onChange?.(button.dataset.cardsView));
+  });
+}
 function renderCards(root, cardState, notify) {
   root.innerHTML =
     pageHead('QR ผู้ป่วย', 'แตะหรือสแกน QR เพื่อเปิดแฟ้มของผู้ป่วยในเหตุการณ์นี้') +
+    cardsViewToggle('cards') +
     `<section class="panel next-patient-card" data-next-patient-card aria-labelledby="next-patient-title">
       <div class="panel-head"><div><h2 id="next-patient-title">QR ผู้ป่วยคนถัดไป</h2><p class="next-patient-incident"></p></div></div>
       <div class="next-patient-content"><a class="next-patient-link"><img class="next-patient-qr" alt="" width="150" height="150"><strong class="next-patient-id" aria-live="polite"></strong></a><div class="next-patient-purpose"><p>เมื่อบันทึกข้อมูลสำเร็จ QR ของผู้ป่วยคนถัดไปจะขึ้นตรงนี้อัตโนมัติ</p><p>สแกน QR ใบเดิมอีกครั้งเพื่อดูประวัติผู้ป่วยคนนั้น</p><button type="button" class="btn btn-secondary print-current-qr">พิมพ์ QR ใบนี้</button></div></div>
@@ -252,11 +282,109 @@ function renderCards(root, cardState, notify) {
   updateNextPatientCard(root, cardState);
   const print = root.querySelector('.print-current-qr');
   print.addEventListener('click', () => printCurrentCard(root, print, notify));
+  bindCardsViewToggle(root, cardState.onCardsViewChange);
+}
+
+function normalizeV2Start(value) {
+  const raw = String(value ?? '').trim();
+  if (raw.length > 5596 || !/^\d+$/.test(raw)) return null;
+  const start = BigInt(raw);
+  return start > 0n ? start.toString() : null;
+}
+function normalizeV2Count(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 500 ? n : null;
+}
+function v2Code(start, offset) {
+  return `MCI-${(BigInt(start) + BigInt(offset)).toString().padStart(3, '0')}`;
+}
+function renderCardsV2(
+  root,
+  { incidentId, incidentName, incidentClosed, cardRange, onCardRangeChange, onCardsViewChange } = {},
+  notify,
+) {
+  const activeIncident = Boolean(incidentId) && !incidentClosed;
+  const initial = cardRange || { start: '1', count: 12 };
+  root.innerHTML =
+    pageHead('การ์ด QR ผู้ป่วย', 'กดที่บัตรเพื่อเปิดข้อมูลผู้ป่วย หรือพิมพ์บัตรไว้สแกนที่จุดปฏิบัติงาน') +
+    cardsViewToggle('cards-v2') +
+    `<section class="panel cards-v2-controls"><form class="qr-controls qr-controls-v2">
+      <label class="field"><span>จำนวนบัตร</span><input class="cards-v2-count" name="count" type="number" min="1" max="500" value="${esc(initial.count)}" required></label>
+      <label class="field"><span>รหัสเริ่มต้น</span><input class="cards-v2-start" name="start" type="text" inputmode="numeric" pattern="[0-9]+" maxlength="5596" value="${esc(initial.start)}" required></label>
+      <div class="page-actions"><button class="btn btn-secondary cards-v2-preview" type="submit">สร้างตัวอย่าง</button><button class="btn btn-primary cards-v2-print" type="button">พิมพ์ช่วงนี้</button></div>
+    </form><small class="cards-v2-help">${activeIncident ? 'พิมพ์ได้ครั้งละ 1–500 ใบ' : 'ยังไม่มีเหตุการณ์ที่เปิดรับผู้ป่วย จึงยังสร้าง QR ไม่ได้'}</small><p class="form-error cards-v2-error" role="alert" hidden></p></section>
+    <section id="print-area-v2" class="qr-grid qr-grid-v2" aria-label="ตัวอย่างการ์ด QR หลายใบ"></section>`;
+  const form = root.querySelector('.qr-controls-v2');
+  const area = root.querySelector('#print-area-v2');
+  const error = root.querySelector('.cards-v2-error');
+  const print = root.querySelector('.cards-v2-print');
+  let renderedKey = '';
+  if (!activeIncident) {
+    form.querySelectorAll('input,button').forEach((control) => { control.disabled = true; });
+    error.textContent = incidentClosed ? 'เหตุการณ์ปิดแล้ว' : 'กรุณาเลือกเหตุการณ์ที่เปิดอยู่ก่อน';
+    error.hidden = false;
+  }
+  const draw = () => {
+    const data = Object.fromEntries(new FormData(form));
+    const start = normalizeV2Start(data.start);
+    const count = normalizeV2Count(data.count);
+    if (!activeIncident || start === null || count === null) {
+      error.textContent = !activeIncident ? 'ยังสร้าง QR ไม่ได้ในสถานะนี้' : 'กรุณาระบุรหัสเริ่มต้นเป็นตัวเลข และจำนวน 1–500 ใบ';
+      error.hidden = false;
+      return false;
+    }
+    const nextKey = `${start}:${count}`;
+    if (nextKey === renderedKey) {
+      error.hidden = true;
+      return true;
+    }
+    error.hidden = true;
+    area.innerHTML = Array.from({ length: count }, (_, index) => {
+      const code = v2Code(start, index);
+      return `<article class="qr-card qr-card-v2" data-card-code="${esc(code)}">
+        <div class="qr-caption"><strong>${esc(code)}</strong><span>${esc(incidentName || 'ThaiSim')}</span></div>
+        <a class="qr-link" href="${esc(patientLink(code, incidentId, 'cards-v2'))}" aria-label="เปิดแฟ้ม ${esc(code)}" title="เปิดแฟ้ม ${esc(code)}">
+          <img src="${qrImagePath(code, incidentId, 'cards-v2')}" alt="QR สำหรับรหัส ${esc(code)}" loading="${index < 12 ? 'eager' : 'lazy'}" width="132" height="132">
+        </a>
+        <div class="qr-bands">
+          <span class="badge badge-red">แดง</span><span class="badge badge-yellow">เหลือง</span>
+          <span class="badge badge-green">เขียว</span><span class="badge badge-black">ดำ</span>
+        </div>
+        <span class="qr-card-status" role="status" hidden></span>
+      </article>`;
+    }).join('');
+    renderedKey = nextKey;
+    onCardRangeChange?.({ start, count });
+    return true;
+  };
+  form.addEventListener('submit', (event) => { event.preventDefault(); if (form.reportValidity()) draw(); });
+  print.addEventListener('click', async () => {
+    if (!form.reportValidity() || !draw()) return;
+    const printKey = renderedKey;
+    print.disabled = true;
+    try {
+      const images = [...area.querySelectorAll('img')];
+      images.forEach((img) => { img.loading = 'eager'; });
+      await Promise.all(images.map((img) => img.decode()));
+      const latestStart = normalizeV2Start(form.elements.start.value);
+      const latestCount = normalizeV2Count(form.elements.count.value);
+      const latestKey = latestStart === null || latestCount === null
+        ? ''
+        : `${latestStart}:${latestCount}`;
+      if (print.isConnected && !root.hidden && printKey === renderedKey && latestKey === renderedKey)
+        window.print();
+      else if (print.isConnected && latestKey !== renderedKey)
+        notify('ช่วงรหัสเปลี่ยนแล้ว กรุณากดสร้างตัวอย่างอีกครั้ง', 'error');
+    } catch { notify('โหลด QR ไม่ครบ กรุณารีเฟรชหน้าแล้วลองใหม่', 'error'); }
+    finally { print.disabled = false; }
+  });
+  bindCardsViewToggle(root, onCardsViewChange);
+  draw();
 }
 
 export function renderExtras(
   page,
-  { root, state, api, notify, incidentId, incidentName, incidentClosed },
+  { root, state, api, notify, incidentId, incidentName, incidentClosed, cardRange, onCardRangeChange, onCardsViewChange },
 ) {
   if (!root) throw new Error('Extras root is required');
   if (page === 'stock')
@@ -268,6 +396,16 @@ export function renderExtras(
       incidentName,
       nextPatientId: state?.nextPatientId,
       incidentClosed,
+      onCardsViewChange,
+    }, notify);
+  else if (page === 'cards-v2')
+    renderCardsV2(root, {
+      incidentId,
+      incidentName,
+      incidentClosed,
+      cardRange,
+      onCardRangeChange,
+      onCardsViewChange,
     }, notify);
   else root.innerHTML = '<p class="empty">ไม่พบหน้าที่เลือก</p>';
   return root;
